@@ -1127,10 +1127,7 @@ export class Computed<T> implements Source, TrackingObserver {
       );
     }
     this.state = "computing";
-    for (const source of this.sources) {
-      source.removeObserver(this);
-    }
-    this.sources.clear();
+    this.unsubscribeFromSources();
 
     const newValue = withTracking(this, () => this.compute());
 
@@ -1139,6 +1136,13 @@ export class Computed<T> implements Source, TrackingObserver {
       this.cachedValue = newValue;
       this.hasValue = true;
     }
+  }
+
+  private unsubscribeFromSources(): void {
+    for (const source of this.sources) {
+      source.removeObserver(this);
+    }
+    this.sources.clear();
   }
 
   addSource(source: Source): void {
@@ -1159,8 +1163,20 @@ export class Computed<T> implements Source, TrackingObserver {
   removeObserver(observer: Observer): void {
     this.observers.delete(observer);
   }
+
+  dispose(): void {
+    this.unsubscribeFromSources();
+  }
 }
 ```
+
+> **Correction (post-final-review):** added `dispose()` (and factored its shared logic
+> into `unsubscribeFromSources()`, also used by `recompute()`). Without it, nothing ever
+> removed a `Computed` from its source signals' observer sets except a *subsequent*
+> `recompute()` — so a `Computed` that stops being recomputed (e.g. the internal computed
+> inside a disposed `Effect`, see Task 8's correction) stayed permanently reachable from
+> its source signals, along with everything its compute closure captured. `Effect.dispose()`
+> now calls `this.computed.dispose()` to release this.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1783,6 +1799,7 @@ export class Effect {
     this.disposed = true;
     this.disposeChildren();
     this.watcher.unwatch(this.computed);
+    this.computed.dispose();
     this.cleanup?.();
     this.cleanup = undefined;
   }
