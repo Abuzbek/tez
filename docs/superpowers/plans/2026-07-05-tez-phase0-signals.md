@@ -771,9 +771,17 @@ export function withoutTracking<T>(fn: () => T): T {
 export function trackAccess(source: Source): void {
   if (currentConsumer) {
     currentConsumer.addSource(source);
+    source.addObserver(currentConsumer);
   }
 }
 ```
+
+> **Correction (post-Task-4 review):** `trackAccess` is the single place that wires
+> both directions of a dependency edge — the consumer records the source (via
+> `addSource`) and the source records the consumer as an observer (via
+> `addObserver`) — in the same call. No other file may call `source.addObserver`
+> to establish a tracked dependency; `addSource` implementations (e.g.
+> `Computed.addSource` in Task 5) only need to update their own bookkeeping.
 
 - [ ] **Step 8: Run test to verify it passes**
 
@@ -1126,7 +1134,6 @@ export class Computed<T> implements Source, TrackingObserver {
 
   addSource(source: Source): void {
     this.sources.add(source);
-    source.addObserver(this);
   }
 
   notify(): void {
