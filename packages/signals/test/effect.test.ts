@@ -119,6 +119,20 @@ describe("effect", () => {
     expect(innerRuns).toEqual(["a", "a", "b"]);
   });
 
+  it("does not run again if disposed after being scheduled but before the flush executes", () => {
+    const s = new State(1);
+    const fn = vi.fn(() => {
+      s.get();
+    });
+    batch(() => {
+      const dispose = effect(fn);
+      fn.mockClear();
+      s.set(2); // schedules the effect (batchDepth > 0, so no immediate flush)
+      dispose(); // disposes before flushEffects() runs at the end of batch()
+    });
+    expect(fn).not.toHaveBeenCalled();
+  });
+
   it("auto-disposes a nested effect when the parent is disposed", () => {
     const inner = new State("a");
     const innerCleanup = vi.fn();

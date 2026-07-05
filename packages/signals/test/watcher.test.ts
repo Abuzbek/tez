@@ -63,6 +63,16 @@ describe("Watcher", () => {
     expect(onNotify).not.toHaveBeenCalled();
   });
 
+  it("unwatch() after notify() has already disarmed the signal is a no-op", () => {
+    const onNotify = vi.fn();
+    const s = new State(1);
+    const w = new Watcher(onNotify);
+    w.watch(s);
+    s.set(2);
+    expect(() => w.unwatch(s)).not.toThrow();
+    expect(w.getPending()).toEqual([]);
+  });
+
   it("getPending() is empty before any change", () => {
     const s = new State(1);
     const w = new Watcher(() => {});
