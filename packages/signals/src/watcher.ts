@@ -27,6 +27,7 @@ export class Watcher implements Observer {
   }
 
   notify(): void {
+    if (this.armed.size === 0) return;
     for (const signal of this.watched) {
       signal.removeObserver(this);
     }
