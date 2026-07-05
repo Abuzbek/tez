@@ -884,11 +884,20 @@ Expected: FAIL — `Cannot find module '../src/state'`.
 import type { Observer } from "./graph";
 
 export function markObserversStale(observers: Iterable<Observer>): void {
-  for (const observer of observers) {
+  for (const observer of Array.from(observers)) {
     observer.notify();
   }
 }
 ```
+
+> **Correction (post-Task-8 review):** iterates a snapshot (`Array.from(observers)`), not the live
+> `Set`, because `Observer.notify()` can synchronously mutate that same `Set` before the loop
+> finishes — specifically, `Watcher.notify()` removes itself as an observer and then, via a
+> synchronous `scheduleEffect`/`flushEffects` flush outside `batch()`, immediately re-adds itself
+> (`Effect.run()` re-arming via `watcher.watch()`). Per the `Set` iteration spec, deleting and
+> re-adding the same value mid-iteration causes that live iterator to revisit it forever. Snapshotting
+> up front sidesteps this regardless of what a given `Observer.notify()` does to the set during the
+> call.
 
 - [ ] **Step 4: Implement `state.ts`**
 
