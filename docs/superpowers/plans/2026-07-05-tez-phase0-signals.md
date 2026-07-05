@@ -1528,6 +1528,7 @@ export class Watcher implements Observer {
   }
 
   notify(): void {
+    if (this.armed.size === 0) return;
     for (const signal of this.watched) {
       signal.removeObserver(this);
     }
@@ -1540,6 +1541,16 @@ export class Watcher implements Observer {
   }
 }
 ```
+
+> **Correction (post-Task-9 review):** `notify()` now returns immediately if `armed` is
+> already empty. Without this guard, a `Watcher` that watches both a source and something
+> downstream of that source (e.g. `watch(state, computedThatReadsState)`) gets notified
+> twice for one change: once transitively (the computed's own propagation reaches the
+> watcher first and disarms it) and once directly (the watcher was also a direct entry in
+> the source's own observer snapshot, captured before the transitive call ran). Since a
+> disarmed watcher (`armed.size === 0`) has nothing left to report until it's re-armed via
+> `watch()`, a second `notify()` call arriving before that happens is stale and must be a
+> no-op.
 
 - [ ] **Step 4: Run test to verify it passes**
 
