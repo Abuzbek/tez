@@ -1,0 +1,15 @@
+{
+  "name": "@tez/vite-plugin",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "echo 'no build yet'",
+    "test": "echo 'no tests yet'",
+    "test:coverage": "echo 'no tests yet'",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {}
+}
