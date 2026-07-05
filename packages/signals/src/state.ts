@@ -1,4 +1,4 @@
-import { getCurrentConsumer, trackAccess, type Observer, type Source } from "./graph";
+import { trackAccess, type Observer, type Source } from "./graph";
 import { markObserversStale } from "./propagate";
 
 export interface StateOptions<T> {
@@ -16,10 +16,6 @@ export class State<T> implements Source {
   }
 
   get(): T {
-    const consumer = getCurrentConsumer();
-    if (consumer) {
-      this.addObserver(consumer);
-    }
     trackAccess(this);
     return this.value;
   }

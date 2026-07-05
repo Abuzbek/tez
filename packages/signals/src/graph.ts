@@ -40,5 +40,6 @@ export function withoutTracking<T>(fn: () => T): T {
 export function trackAccess(source: Source): void {
   if (currentConsumer) {
     currentConsumer.addSource(source);
+    source.addObserver(currentConsumer);
   }
 }
