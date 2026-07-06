@@ -2,5 +2,17 @@
   "name": "playground",
   "version": "0.0.0",
   "private": true,
-  "description": "Kitchen-sink app exercising every Tez feature. Not yet implemented (Phase 1+)."
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@tez/runtime-dom": "workspace:*",
+    "@tez/signals": "workspace:*"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
 }

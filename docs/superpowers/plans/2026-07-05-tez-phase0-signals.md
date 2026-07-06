@@ -1748,6 +1748,7 @@ Expected: FAIL — `Cannot find module '../src/effect'`.
 import { Computed } from "./computed";
 import { Watcher } from "./watcher";
 import { scheduleEffect } from "./batch";
+import { untrack } from "./untrack";
 
 export type EffectCleanup = () => void;
 export type EffectFn = () => void | EffectCleanup;
@@ -1790,7 +1791,7 @@ export class Effect {
 
   run(): void {
     if (this.disposed) return;
-    this.computed.get();
+    untrack(() => this.computed.get());
     this.watcher.watch(this.computed);
   }
 
@@ -1810,6 +1811,24 @@ export function effect(fn: EffectFn): () => void {
   return () => instance.dispose();
 }
 ```
+
+> **Correction (discovered during Phase 1, cycle 1 — `mount()`'s nested-effect
+> pattern):** `run()` wraps `this.computed.get()` in `untrack()`. Without it,
+> `Computed.get()`'s trailing `trackAccess(this)` call runs with whatever
+> `currentConsumer` is active *at that moment* — and if this `Effect` was
+> constructed synchronously during another effect's own execution (exactly
+> `packages/runtime-dom`'s `mount()`/`mapArray()` pattern: nested `effect()`
+> calls made from inside a running effect's body), the outer effect's
+> computed would spuriously become a dependent of the inner effect's
+> internal (always-`void`) computed. A signal read only by the inner effect
+> would then incorrectly retrigger the outer effect too — in `mount()`'s
+> case, this disposed the real DOM binding before it could update, then
+> rebuilt a disconnected replacement subtree never attached to the page.
+> `untrack()` is safe here specifically because effects are meant to be
+> reactive graph *leaves*: nothing legitimately reads an `Effect`'s
+> internal computed as a value (its type is always `void`), so suppressing
+> that one registration has no correct use case to break. See
+> `packages/runtime-dom`'s Task 5 report for the original diagnosis.
 
 - [ ] **Step 4: Run test to verify it passes**
 
