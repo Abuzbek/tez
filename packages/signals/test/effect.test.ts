@@ -153,6 +153,35 @@ describe("effect", () => {
     expect(fn).not.toHaveBeenCalled();
   });
 
+  it("does not spuriously depend on a nested effect constructed during its own run", async () => {
+    // Regression test: Effect.run() used to call this.computed.get() without
+    // untrack(), so its trailing trackAccess(this) call would register the
+    // effect's own internal computed as a dependency of whichever consumer
+    // was active at that moment. Constructing a nested effect() synchronously
+    // during an outer effect's run made the outer effect's computed spuriously
+    // depend on the (always-void) inner effect's computed -- so a signal read
+    // only by the inner effect would incorrectly retrigger the outer one too.
+    const count = new State(1);
+    let outerRuns = 0;
+    let innerLastValue = 0;
+
+    effect(() => {
+      outerRuns++;
+      effect(() => {
+        innerLastValue = count.get();
+      });
+    });
+
+    expect(outerRuns).toBe(1);
+    expect(innerLastValue).toBe(1);
+
+    count.set(2);
+    await flushMicrotasks();
+
+    expect(innerLastValue).toBe(2);
+    expect(outerRuns).toBe(1);
+  });
+
   it("auto-disposes a nested effect when the parent is disposed", () => {
     const inner = new State("a");
     const innerCleanup = vi.fn();

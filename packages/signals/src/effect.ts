@@ -1,6 +1,7 @@
 import { Computed } from "./computed";
 import { Watcher } from "./watcher";
 import { scheduleEffect } from "./batch";
+import { untrack } from "./untrack";
 
 export type EffectCleanup = () => void;
 export type EffectFn = () => void | EffectCleanup;
@@ -43,7 +44,15 @@ export class Effect {
 
   run(): void {
     if (this.disposed) return;
-    this.computed.get();
+    // untrack(): this.computed.get() is Effect's own internal recomputation
+    // trigger, not a "read" any external consumer should depend on. Without
+    // untrack, Computed.get()'s trailing trackAccess(this) call would run
+    // with whatever currentConsumer happens to be active at that moment —
+    // and if this Effect was constructed synchronously during another
+    // effect's own execution (e.g. a nested effect() call), that outer
+    // effect's computed would spuriously become a dependent of this one,
+    // even though nothing ever reads an Effect's (always-void) return value.
+    untrack(() => this.computed.get());
     this.watcher.watch(this.computed);
   }
 
