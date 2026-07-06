@@ -52,6 +52,7 @@ export class Effect {
     this.disposed = true;
     this.disposeChildren();
     this.watcher.unwatch(this.computed);
+    this.computed.dispose();
     this.cleanup?.();
     this.cleanup = undefined;
   }

@@ -42,10 +42,7 @@ export class Computed<T> implements Source, TrackingObserver {
       );
     }
     this.state = "computing";
-    for (const source of this.sources) {
-      source.removeObserver(this);
-    }
-    this.sources.clear();
+    this.unsubscribeFromSources();
 
     const newValue = withTracking(this, () => this.compute());
 
@@ -54,6 +51,13 @@ export class Computed<T> implements Source, TrackingObserver {
       this.cachedValue = newValue;
       this.hasValue = true;
     }
+  }
+
+  private unsubscribeFromSources(): void {
+    for (const source of this.sources) {
+      source.removeObserver(this);
+    }
+    this.sources.clear();
   }
 
   addSource(source: Source): void {
@@ -73,5 +77,9 @@ export class Computed<T> implements Source, TrackingObserver {
 
   removeObserver(observer: Observer): void {
     this.observers.delete(observer);
+  }
+
+  dispose(): void {
+    this.unsubscribeFromSources();
   }
 }

@@ -69,6 +69,26 @@ describe("effect", () => {
     expect(fn).not.toHaveBeenCalled();
   });
 
+  it("dispose releases the internal computed's subscription to its source signal", () => {
+    // Regression test: Effect.dispose() used to only unwatch the Watcher from
+    // the internal Computed, but never removed that Computed from its source
+    // signal's observer set. That left `source -> computed -> effect closure`
+    // reachable forever. Computed.dispose() (via unsubscribeFromSources())
+    // fixes this by calling source.removeObserver() on every tracked source.
+    const s = new State(1);
+    const removeObserverSpy = vi.spyOn(s, "removeObserver");
+    const dispose = effect(() => {
+      s.get();
+    });
+    // The first run only adds sources; nothing should have been removed yet.
+    expect(removeObserverSpy).not.toHaveBeenCalled();
+
+    dispose();
+
+    expect(removeObserverSpy).toHaveBeenCalledOnce();
+    expect(removeObserverSpy).toHaveBeenCalledWith(expect.anything());
+  });
+
   it("dispose is idempotent", () => {
     const cleanup = vi.fn();
     const dispose = effect(() => cleanup);
