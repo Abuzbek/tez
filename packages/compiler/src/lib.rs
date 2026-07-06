@@ -5,6 +5,7 @@ use oxc_span::SourceType;
 use oxc_ast_visit::Visit;
 use oxc_syntax::scope::ScopeFlags;
 use oxc_ast::ast::{JSXAttributeItem, JSXAttributeName, JSXChild, JSXElementName};
+use oxc_ast::ast::Expression;
 
 #[derive(Debug)]
 pub struct ParseError {
@@ -90,6 +91,15 @@ impl<'a> Visit<'a> for StructureCollector {
 
         oxc_ast_visit::walk::walk_jsx_element(self, it);
     }
+
+    fn visit_call_expression(&mut self, it: &oxc_ast::ast::CallExpression<'a>) {
+        if let Expression::Identifier(ident) = &it.callee {
+            if ident.name.as_str() == "signal" {
+                self.summary.signal_call_sites += 1;
+            }
+        }
+        oxc_ast_visit::walk::walk_call_expression(self, it);
+    }
 }
 
 pub fn extract_structure(program: &Program) -> StructuralSummary {
@@ -162,5 +172,21 @@ mod structure_tests {
         assert!(summary.jsx_elements[0].is_native);
         assert_eq!(summary.jsx_elements[1].tag_name, "Profile");
         assert!(!summary.jsx_elements[1].is_native);
+    }
+
+    #[test]
+    fn counter_component_full_structure() {
+        let source = include_str!("../tests/fixtures/counter.tsx");
+        let allocator = Allocator::default();
+        let program = crate::parse(&allocator, source).unwrap();
+        let summary = crate::extract_structure(&program);
+
+        assert_eq!(summary.function_names, vec!["Counter".to_string()]);
+        assert_eq!(summary.jsx_elements.len(), 1);
+        assert_eq!(summary.jsx_elements[0].tag_name, "button");
+        assert!(summary.jsx_elements[0].is_native);
+        assert_eq!(summary.jsx_elements[0].attribute_names, vec!["onClick".to_string()]);
+        assert_eq!(summary.jsx_expression_containers, 1);
+        assert_eq!(summary.signal_call_sites, 1);
     }
 }
