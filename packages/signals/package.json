@@ -1,0 +1,21 @@
+{
+  "name": "@tez/signals",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "TC39-Signals-shaped reactive core. Zero dependencies, publishable alone.",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc --noEmit false --emitDeclarationOnly false -p tsconfig.json --outDir dist",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "vitest": "^2.1.8",
+    "@vitest/coverage-v8": "^2.1.8",
+    "typescript": "^5.6.0"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "playground",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Kitchen-sink app exercising every Tez feature. Not yet implemented (Phase 1+)."
+}

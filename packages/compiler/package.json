@@ -1,0 +1,6 @@
+{
+  "name": "@tez/compiler",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Rust/oxc-based compiler, exposed to JS via napi-rs. Not yet implemented (Phase 1)."
+}

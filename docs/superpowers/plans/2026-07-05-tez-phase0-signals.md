@@ -771,9 +771,17 @@ export function withoutTracking<T>(fn: () => T): T {
 export function trackAccess(source: Source): void {
   if (currentConsumer) {
     currentConsumer.addSource(source);
+    source.addObserver(currentConsumer);
   }
 }
 ```
+
+> **Correction (post-Task-4 review):** `trackAccess` is the single place that wires
+> both directions of a dependency edge — the consumer records the source (via
+> `addSource`) and the source records the consumer as an observer (via
+> `addObserver`) — in the same call. No other file may call `source.addObserver`
+> to establish a tracked dependency; `addSource` implementations (e.g.
+> `Computed.addSource` in Task 5) only need to update their own bookkeeping.
 
 - [ ] **Step 8: Run test to verify it passes**
 
@@ -876,11 +884,20 @@ Expected: FAIL — `Cannot find module '../src/state'`.
 import type { Observer } from "./graph";
 
 export function markObserversStale(observers: Iterable<Observer>): void {
-  for (const observer of observers) {
+  for (const observer of Array.from(observers)) {
     observer.notify();
   }
 }
 ```
+
+> **Correction (post-Task-8 review):** iterates a snapshot (`Array.from(observers)`), not the live
+> `Set`, because `Observer.notify()` can synchronously mutate that same `Set` before the loop
+> finishes — specifically, `Watcher.notify()` removes itself as an observer and then, via a
+> synchronous `scheduleEffect`/`flushEffects` flush outside `batch()`, immediately re-adds itself
+> (`Effect.run()` re-arming via `watcher.watch()`). Per the `Set` iteration spec, deleting and
+> re-adding the same value mid-iteration causes that live iterator to revisit it forever. Snapshotting
+> up front sidesteps this regardless of what a given `Observer.notify()` does to the set during the
+> call.
 
 - [ ] **Step 4: Implement `state.ts`**
 
@@ -1110,10 +1127,7 @@ export class Computed<T> implements Source, TrackingObserver {
       );
     }
     this.state = "computing";
-    for (const source of this.sources) {
-      source.removeObserver(this);
-    }
-    this.sources.clear();
+    this.unsubscribeFromSources();
 
     const newValue = withTracking(this, () => this.compute());
 
@@ -1124,9 +1138,15 @@ export class Computed<T> implements Source, TrackingObserver {
     }
   }
 
+  private unsubscribeFromSources(): void {
+    for (const source of this.sources) {
+      source.removeObserver(this);
+    }
+    this.sources.clear();
+  }
+
   addSource(source: Source): void {
     this.sources.add(source);
-    source.addObserver(this);
   }
 
   notify(): void {
@@ -1143,8 +1163,20 @@ export class Computed<T> implements Source, TrackingObserver {
   removeObserver(observer: Observer): void {
     this.observers.delete(observer);
   }
+
+  dispose(): void {
+    this.unsubscribeFromSources();
+  }
 }
 ```
+
+> **Correction (post-final-review):** added `dispose()` (and factored its shared logic
+> into `unsubscribeFromSources()`, also used by `recompute()`). Without it, nothing ever
+> removed a `Computed` from its source signals' observer sets except a *subsequent*
+> `recompute()` — so a `Computed` that stops being recomputed (e.g. the internal computed
+> inside a disposed `Effect`, see Task 8's correction) stayed permanently reachable from
+> its source signals, along with everything its compute closure captured. `Effect.dispose()`
+> now calls `this.computed.dispose()` to release this.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1512,6 +1544,7 @@ export class Watcher implements Observer {
   }
 
   notify(): void {
+    if (this.armed.size === 0) return;
     for (const signal of this.watched) {
       signal.removeObserver(this);
     }
@@ -1524,6 +1557,16 @@ export class Watcher implements Observer {
   }
 }
 ```
+
+> **Correction (post-Task-9 review):** `notify()` now returns immediately if `armed` is
+> already empty. Without this guard, a `Watcher` that watches both a source and something
+> downstream of that source (e.g. `watch(state, computedThatReadsState)`) gets notified
+> twice for one change: once transitively (the computed's own propagation reaches the
+> watcher first and disarms it) and once directly (the watcher was also a direct entry in
+> the source's own observer snapshot, captured before the transitive call ran). Since a
+> disarmed watcher (`armed.size === 0`) has nothing left to report until it's re-armed via
+> `watch()`, a second `notify()` call arriving before that happens is stale and must be a
+> no-op.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1756,6 +1799,7 @@ export class Effect {
     this.disposed = true;
     this.disposeChildren();
     this.watcher.unwatch(this.computed);
+    this.computed.dispose();
     this.cleanup?.();
     this.cleanup = undefined;
   }
