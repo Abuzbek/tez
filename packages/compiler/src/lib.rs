@@ -61,6 +61,11 @@ impl<'a> Visit<'a> for StructureCollector {
             JSXElementName::IdentifierReference(ident) => {
                 (ident.name.as_str().to_string(), false)
             }
+            // Catches JSXElementName::MemberExpression (<Foo.Bar/>),
+            // NamespacedName (<svg:rect/>), and ThisExpression (<this/>) --
+            // none of the fixtures in this sub-cycle exercise these shapes.
+            // A later sub-cycle handling SVG or namespaced tags will need to
+            // give this arm real handling instead of this fallback.
             _ => ("<complex>".to_string(), false),
         };
 
@@ -93,6 +98,10 @@ impl<'a> Visit<'a> for StructureCollector {
     }
 
     fn visit_call_expression(&mut self, it: &oxc_ast::ast::CallExpression<'a>) {
+        // Heuristic only: matches a bare identifier callee spelled "signal".
+        // No import resolution -- this does not confirm the call actually
+        // resolves to @tez/signals' `signal` export. That requires semantic
+        // analysis, out of scope for this sub-cycle.
         if let Expression::Identifier(ident) = &it.callee {
             if ident.name.as_str() == "signal" {
                 self.summary.signal_call_sites += 1;
