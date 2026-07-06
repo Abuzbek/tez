@@ -475,7 +475,7 @@ git commit -m "Add listen() delegated event handling"
 - Test: `packages/runtime-dom/test/list.test.ts`
 
 **Interfaces:**
-- Consumes: `signal`, `computed`, `effect`, `Signal` from `@tez/signals`.
+- Consumes: `signal`, `computed`, `effect`, `untrack`, `Signal` from `@tez/signals`.
 - Produces: `mapArray<T, U extends Node>(items: () => T[], keyFn: (item: T) => unknown, renderItem: (item: () => T, index: () => number) => U): () => U[]`. The returned accessor is itself reactive (backed by an internal `signal`), so a caller can do `effect(() => container.replaceChildren(...getNodes()))` and have it re-run whenever the list changes. Task 6 (playground demo) uses this exact pattern for the todo list.
 
 - [ ] **Step 1: Write the failing tests**
@@ -561,8 +561,11 @@ describe("mapArray", () => {
       (item) => {
         const el = document.createElement("li");
         const id = item().id;
+        // No reactive read inside this probe effect on purpose: it exists to
+        // observe *permanent* disposal on key removal, not the ordinary
+        // cleanup-then-rerun cycle a genuinely tracked dependency would also
+        // produce on every persisting-item update.
         effect(() => {
-          item();
           return () => disposedIds.push(id);
         });
         return el;
@@ -634,7 +637,7 @@ Expected: FAIL — `Cannot find module '../src/list'`.
 
 `packages/runtime-dom/src/list.ts`:
 ```ts
-import { signal, computed, effect, Signal } from "@tez/signals";
+import { signal, computed, effect, untrack, Signal } from "@tez/signals";
 
 interface ListEntry<T, U extends Node> {
   itemSignal: ReturnType<typeof signal<T>>;
@@ -672,7 +675,19 @@ export function mapArray<T, U extends Node>(
         const indexSignal = signal(index);
         let node!: U;
         const dispose = effect(() => {
-          node = renderItem(() => itemSignal.get(), () => indexSignal.get());
+          // untrack(): renderItem may read item()/index() synchronously at
+          // its own top level (e.g. capturing an id for a closure) — without
+          // untrack, that read would make THIS wrapping effect itself track
+          // itemSignal/indexSignal, so updating a persisting entry's signal
+          // (below, in the reuse branch) would reentrantly re-run renderItem
+          // instead of just updating whatever nested binding (insert/setAttr/
+          // etc.) explicitly subscribed to it. Nested effect() calls made
+          // inside renderItem (e.g. insert()'s own internal effect) are
+          // unaffected by this — they establish their own tracking scope
+          // regardless of the ambient untrack.
+          untrack(() => {
+            node = renderItem(() => itemSignal.get(), () => indexSignal.get());
+          });
         });
         entry = { itemSignal, indexSignal, node, dispose };
         entries.set(key, entry);
@@ -728,6 +743,37 @@ export function mapArray<T, U extends Node>(
 > changing its approved return type from `() => U[]` to something larger —
 > a public API change outside this cycle's scope. Not exercised by this
 > cycle's test suite or demo (the playground never unmounts the todo list).
+>
+> **Second correction (same review round):** the `Watcher` swap above fixed
+> the *outer* sweep, but surfaced a second, independent bug: `renderItem`
+> commonly reads `item()`/`index()` synchronously at its own top level (e.g.
+> `const id = item().id;`, used later in a closure) — a completely normal
+> pattern, and exactly what the earlier "disposes a removed item" test does.
+> Without `untrack()`, that read makes the *wrapping* per-item `effect()`
+> itself track `itemSignal`/`indexSignal` as its own dependency. Then
+> `entry.itemSignal.set(item)` in the reuse branch (for a *persisting* key)
+> reentrantly re-triggers that same wrapping effect mid-`reconcile()` —
+> re-running `renderItem` and producing a brand-new node/DOM identity for an
+> entry that was supposed to be reused untouched. Wrapping the `renderItem`
+> call itself in `untrack()` fixes this: the wrapping effect ends up with
+> zero tracked dependencies (so it never self-triggers), while any *nested*
+> `effect()` call renderItem makes on its own behalf (`insert`, `setAttr`,
+> `toggleClass`, or a hand-written `effect()` like the probe below) is
+> unaffected — a nested `effect()` always establishes its own tracking scope
+> regardless of an ambient `untrack()`, because `currentOwner` (ownership,
+> in `effect.ts`) and `currentConsumer` (dependency tracking, in `graph.ts`)
+> are independent mechanisms; `untrack()` only suspends the latter. This is
+> also the *correct* alignment with §2.4's own documented contract (a plain
+> top-level read inside `renderItem` is a one-time read, not a reactive
+> binding) — the original code accidentally violated that contract by
+> making the wrapping effect react to it. The "disposes a removed item's
+> effect scope" test's own probe effect was also fixed alongside this (see
+> its updated code above): it previously called `item()` reactively inside
+> its own body, which — correctly, per normal effect semantics — fires its
+> cleanup on every value change, not only on final disposal, conflating
+> "reused with an updated value" with "permanently torn down." The fixed
+> probe reads nothing reactive, so its cleanup fires only when its owning
+> per-item effect is actually disposed.
 
 - [ ] **Step 4: Run test to verify it passes**
 
