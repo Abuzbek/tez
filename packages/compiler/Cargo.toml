@@ -1,0 +1,13 @@
+[package]
+name = "tez-compiler"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+oxc_allocator = "0.116.0"
+oxc_ast = "0.116.0"
+oxc_ast_visit = "0.116.0"
+oxc_parser = "0.116.0"
+oxc_span = "0.116.0"
+oxc_syntax = "0.116.0"
