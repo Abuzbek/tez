@@ -485,6 +485,7 @@ git commit -m "Add listen() delegated event handling"
 import { describe, expect, it } from "vitest";
 import { signal, effect } from "@tez/signals";
 import { mapArray } from "../src/list";
+import { mount } from "../src/mount";
 
 interface Item {
   id: number;
@@ -625,6 +626,34 @@ describe("mapArray", () => {
     expect(runs).toBe(2);
     expect(container.children.length).toBe(2);
   });
+
+  it("does not leak items() as a dependency of an enclosing effect (e.g. mount())", () => {
+    const items = signal<Item[]>([{ id: 1, label: "a" }]);
+    let mountEffectRuns = 0;
+    const target = document.createElement("div");
+
+    mount(() => {
+      mountEffectRuns++;
+      const el = document.createElement("ul");
+      const getNodes = mapArray(
+        () => items.get(),
+        (item) => item.id,
+        (item) => {
+          const li = document.createElement("li");
+          li.textContent = item().label;
+          return li;
+        },
+      );
+      effect(() => {
+        el.replaceChildren(...getNodes());
+      });
+      return el;
+    }, target);
+
+    expect(mountEffectRuns).toBe(1);
+    items.set([{ id: 1, label: "a-renamed" }]);
+    expect(mountEffectRuns).toBe(1);
+  });
 });
 ```
 
@@ -656,7 +685,7 @@ export function mapArray<T, U extends Node>(
   const itemsView = computed(() => items());
 
   function reconcile(): void {
-    const currentItems = itemsView.get();
+    const currentItems = untrack(() => itemsView.get());
     const nextKeys = new Set(currentItems.map(keyFn));
 
     for (const [key, entry] of entries) {
@@ -774,6 +803,34 @@ export function mapArray<T, U extends Node>(
 > "reused with an updated value" with "permanently torn down." The fixed
 > probe reads nothing reactive, so its cleanup fires only when its owning
 > per-item effect is actually disposed.
+>
+> **Third correction (discovered during Task 8, via the playground demo running
+> in a real browser):** the *initial* `reconcile()` call's `itemsView.get()`
+> read (first line of `reconcile()`) was never wrapped in `untrack()` — every
+> other read in this file got the treatment (the per-item `renderItem` call
+> above), but this one was missed. Since `reconcile()`'s first call runs
+> directly at `mapArray()`'s own top level (not inside any effect `mapArray`
+> creates itself), whatever `effect()` happens to be synchronously executing
+> `mapArray()`'s caller — in practice, `mount()`'s wrapping effect, whenever a
+> component calls `mapArray()` during its own construction — becomes the
+> ambient `currentConsumer` at the moment `itemsView.get()` returns, and gets
+> spuriously registered as `itemsView`'s dependent. Any later signal write
+> that changes the list then incorrectly re-runs `mount()`'s *entire* effect:
+> it disposes every nested binding from the first render (including
+> `mapArray`'s own per-item effects) and reconstructs a second, disconnected
+> component instance that is never attached to the page — the original DOM
+> goes permanently inert. This was invisible to every prior unit test because
+> none of them exercise a `mapArray`-using component through `mount()`'s
+> wrapping effect while also mutating the source signal afterward (`list.test.ts`
+> calls `mapArray()` directly with no `mount()`; `mount.test.ts` mounts
+> components that don't use `mapArray()`) — it only surfaced once the
+> playground demo (Task 7, `TodoList`, mounted via `mount()`) was driven in an
+> actual browser (Task 8). Fixed by wrapping the read:
+> `const currentItems = untrack(() => itemsView.get());` — the same treatment
+> already given to every other read in this file, just missed on this one
+> line. A dedicated regression test (mounting a `mapArray`-using component via
+> `mount()`, then mutating its source signal) was added to `list.test.ts`
+> to close the gap that let this ship unnoticed.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1264,7 +1321,7 @@ import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: "./tests",
   webServer: {
-    command: "pnpm --filter playground dev -- --port 4173",
+    command: "pnpm --filter playground dev --port 4173",
     url: "http://localhost:4173",
     reuseExistingServer: !process.env.CI,
   },
@@ -1273,6 +1330,14 @@ export default defineConfig({
   },
 });
 ```
+
+> **Correction (discovered during Task 8):** the `command` has no `--`
+> separator before `--port 4173`. `apps/playground`'s `dev` script is bare
+> `"vite"`; pnpm forwards args after `--` to the underlying script, so
+> `pnpm --filter playground dev -- --port 4173` would invoke `vite -- --port
+> 4173` — a redundant `--` that Vite's CLI treats as an end-of-options
+> marker, silently starting on its default port 5173 instead of 4173 and
+> causing Playwright's `webServer.url` readiness check to time out.
 
 - [ ] **Step 4: Install dependencies and the Playwright browser binary**
 
