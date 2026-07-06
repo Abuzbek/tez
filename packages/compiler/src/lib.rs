@@ -4,6 +4,7 @@ use oxc_parser::Parser;
 use oxc_span::SourceType;
 use oxc_ast_visit::Visit;
 use oxc_syntax::scope::ScopeFlags;
+use oxc_ast::ast::{JSXAttributeItem, JSXAttributeName, JSXChild, JSXElementName};
 
 #[derive(Debug)]
 pub struct ParseError {
@@ -47,6 +48,47 @@ impl<'a> Visit<'a> for StructureCollector {
             self.summary.function_names.push(id.name.as_str().to_string());
         }
         oxc_ast_visit::walk::walk_function(self, it, flags);
+    }
+
+    fn visit_jsx_element(&mut self, it: &oxc_ast::ast::JSXElement<'a>) {
+        let (tag_name, is_native) = match &it.opening_element.name {
+            JSXElementName::Identifier(ident) => {
+                let name = ident.name.as_str();
+                let native = name.chars().next().map(|c| c.is_lowercase()).unwrap_or(false);
+                (name.to_string(), native)
+            }
+            JSXElementName::IdentifierReference(ident) => {
+                (ident.name.as_str().to_string(), false)
+            }
+            _ => ("<complex>".to_string(), false),
+        };
+
+        let attribute_names = it
+            .opening_element
+            .attributes
+            .iter()
+            .filter_map(|item| match item {
+                JSXAttributeItem::Attribute(attr) => match &attr.name {
+                    JSXAttributeName::Identifier(ident) => Some(ident.name.as_str().to_string()),
+                    JSXAttributeName::NamespacedName(ns) => Some(format!(
+                        "{}:{}",
+                        ns.namespace.name.as_str(),
+                        ns.name.name.as_str()
+                    )),
+                },
+                JSXAttributeItem::SpreadAttribute(_) => None,
+            })
+            .collect();
+
+        self.summary.jsx_elements.push(JsxElementInfo { tag_name, is_native, attribute_names });
+
+        for child in &it.children {
+            if matches!(child, JSXChild::ExpressionContainer(_)) {
+                self.summary.jsx_expression_containers += 1;
+            }
+        }
+
+        oxc_ast_visit::walk::walk_jsx_element(self, it);
     }
 }
 
@@ -93,5 +135,32 @@ mod structure_tests {
         assert_eq!(summary.function_names, vec!["Static".to_string()]);
         assert_eq!(summary.jsx_expression_containers, 0);
         assert_eq!(summary.signal_call_sites, 0);
+    }
+
+    #[test]
+    fn static_component_jsx_element_is_native_div() {
+        let source = include_str!("../tests/fixtures/static.tsx");
+        let allocator = Allocator::default();
+        let program = crate::parse(&allocator, source).unwrap();
+        let summary = crate::extract_structure(&program);
+
+        assert_eq!(summary.jsx_elements.len(), 1);
+        assert_eq!(summary.jsx_elements[0].tag_name, "div");
+        assert!(summary.jsx_elements[0].is_native);
+        assert!(summary.jsx_elements[0].attribute_names.is_empty());
+    }
+
+    #[test]
+    fn mixed_tags_distinguishes_native_from_component_references() {
+        let source = include_str!("../tests/fixtures/mixed_tags.tsx");
+        let allocator = Allocator::default();
+        let program = crate::parse(&allocator, source).unwrap();
+        let summary = crate::extract_structure(&program);
+
+        assert_eq!(summary.jsx_elements.len(), 2);
+        assert_eq!(summary.jsx_elements[0].tag_name, "div");
+        assert!(summary.jsx_elements[0].is_native);
+        assert_eq!(summary.jsx_elements[1].tag_name, "Profile");
+        assert!(!summary.jsx_elements[1].is_native);
     }
 }
