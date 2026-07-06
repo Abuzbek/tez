@@ -475,7 +475,7 @@ git commit -m "Add listen() delegated event handling"
 - Test: `packages/runtime-dom/test/list.test.ts`
 
 **Interfaces:**
-- Consumes: `signal`, `effect` from `@tez/signals`.
+- Consumes: `signal`, `computed`, `effect`, `Signal` from `@tez/signals`.
 - Produces: `mapArray<T, U extends Node>(items: () => T[], keyFn: (item: T) => unknown, renderItem: (item: () => T, index: () => number) => U): () => U[]`. The returned accessor is itself reactive (backed by an internal `signal`), so a caller can do `effect(() => container.replaceChildren(...getNodes()))` and have it re-run whenever the list changes. Task 6 (playground demo) uses this exact pattern for the todo list.
 
 - [ ] **Step 1: Write the failing tests**
@@ -634,7 +634,7 @@ Expected: FAIL — `Cannot find module '../src/list'`.
 
 `packages/runtime-dom/src/list.ts`:
 ```ts
-import { signal, effect } from "@tez/signals";
+import { signal, computed, effect, Signal } from "@tez/signals";
 
 interface ListEntry<T, U extends Node> {
   itemSignal: ReturnType<typeof signal<T>>;
@@ -650,9 +650,10 @@ export function mapArray<T, U extends Node>(
 ): () => U[] {
   const entries = new Map<unknown, ListEntry<T, U>>();
   const ordered = signal<U[]>([]);
+  const itemsView = computed(() => items());
 
-  effect(() => {
-    const currentItems = items();
+  function reconcile(): void {
+    const currentItems = itemsView.get();
     const nextKeys = new Set(currentItems.map(keyFn));
 
     for (const [key, entry] of entries) {
@@ -684,11 +685,49 @@ export function mapArray<T, U extends Node>(
     });
 
     ordered.set(nextOrdered);
+  }
+
+  reconcile();
+
+  const watcher = new Signal.subtle.Watcher(() => {
+    reconcile();
+    watcher.watch(itemsView);
   });
+  watcher.watch(itemsView);
 
   return () => ordered.get();
 }
 ```
+
+> **Correction (post-Task-4 review):** the reconciliation loop runs from a
+> `Signal.subtle.Watcher` callback, not from `effect()`. `@tez/signals`'
+> `Effect` unconditionally calls `disposeChildren()` at the start of every
+> re-run (see `packages/signals/src/effect.ts`) — if the reconciliation loop
+> itself were an `effect()`, every per-item `effect()` call inside
+> `renderItem` would become its child, and *every* list update would
+> silently dispose *all* per-item effects (including ones for keys that
+> persist), since the reuse branch never recreates them. `Watcher` isn't
+> part of the owner/child-disposal tree at all, so per-item effects are only
+> ever disposed by this function's own explicit `entry.dispose()` call when
+> a key is actually removed. `itemsView` (a `Computed`) exists because
+> `Watcher.watch()` needs a real `Source` object to subscribe to, not a bare
+> accessor function — wrapping `items` in `computed()` gives it one while
+> preserving whatever `items()` itself reads internally as the tracked
+> dependency.
+>
+> **Known residual gap, out of scope for this cycle:** per-item effects
+> created during the *initial* `mapArray()` call are parented under
+> whatever effect is synchronously active at that moment (typically
+> `mount()`'s root effect, if `mapArray` is called during initial component
+> construction) and so get disposed automatically if that ancestor is later
+> torn down. Per-item effects created by *later* reconciliations (e.g. an
+> item added via a subsequent `items.set()` from an event handler) are not
+> parented to anything — they are only ever cleaned up by this function's
+> own key-removal logic, not by an ancestor's disposal. A full fix would
+> require `mapArray` to expose its own disposal handle to the caller,
+> changing its approved return type from `() => U[]` to something larger —
+> a public API change outside this cycle's scope. Not exercised by this
+> cycle's test suite or demo (the playground never unmounts the todo list).
 
 - [ ] **Step 4: Run test to verify it passes**
 
