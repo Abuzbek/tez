@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { signal, effect } from "@tez/signals";
 import { mapArray } from "../src/list";
+import { mount } from "../src/mount";
 
 interface Item {
   id: number;
@@ -140,5 +141,33 @@ describe("mapArray", () => {
     ]);
     expect(runs).toBe(2);
     expect(container.children.length).toBe(2);
+  });
+
+  it("does not leak items() as a dependency of an enclosing effect (e.g. mount())", () => {
+    const items = signal<Item[]>([{ id: 1, label: "a" }]);
+    let mountEffectRuns = 0;
+    const target = document.createElement("div");
+
+    mount(() => {
+      mountEffectRuns++;
+      const el = document.createElement("ul");
+      const getNodes = mapArray(
+        () => items.get(),
+        (item) => item.id,
+        (item) => {
+          const li = document.createElement("li");
+          li.textContent = item().label;
+          return li;
+        },
+      );
+      effect(() => {
+        el.replaceChildren(...getNodes());
+      });
+      return el;
+    }, target);
+
+    expect(mountEffectRuns).toBe(1);
+    items.set([{ id: 1, label: "a-renamed" }]);
+    expect(mountEffectRuns).toBe(1);
   });
 });

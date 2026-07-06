@@ -17,7 +17,7 @@ export function mapArray<T, U extends Node>(
   const itemsView = computed(() => items());
 
   function reconcile(): void {
-    const currentItems = itemsView.get();
+    const currentItems = untrack(() => itemsView.get());
     const nextKeys = new Set(currentItems.map(keyFn));
 
     for (const [key, entry] of entries) {
