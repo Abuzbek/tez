@@ -25,8 +25,12 @@ Single Rust crate at `packages/compiler/` (no Cargo workspace — YAGNI; a works
 
 - `oxc_allocator` — arena allocator oxc's AST is built on.
 - `oxc_ast` — AST node types.
+- `oxc_ast_visit` — the `Visit` trait and generated `walk_*` functions used to traverse the AST.
 - `oxc_parser` — the parser itself (TSX/JSX-aware).
 - `oxc_span` — source position/span types.
+- `oxc_syntax` — needed for `ScopeFlags`, a parameter type on `Visit::visit_function`'s generated signature (not otherwise used by this sub-cycle).
+
+> **Correction (found during plan-writing, verified against the actual crate):** the original draft of this section listed only `oxc_allocator`/`oxc_ast`/`oxc_parser`/`oxc_span`. Writing and compiling the plan's implementation against the real oxc `0.116.0` API (the newest version this environment's Rust toolchain can build — see the plan's Tech Stack note) surfaced two more required dependencies: `oxc_ast_visit` (the crate the `Visit` trait actually lives in) and `oxc_syntax` (for `ScopeFlags`, needed only because it appears in `visit_function`'s parameter list).
 
 No `oxc_semantic` in this sub-cycle — scope/symbol resolution belongs to sub-cycle 2's reactivity analysis, which needs to know whether an identifier refers to a `signal()`-declared binding; that requires semantic analysis this sub-cycle deliberately does not build.
 
