@@ -1,0 +1,19 @@
+[package]
+name = "tez-compiler"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# All oxc crates pinned to 0.116.0 -- the newest version buildable with this
+# environment's Rust toolchain (rustc 1.91.1); newer oxc releases require
+# rustc 1.94.0+. Do not `cargo add`/`cargo update` these without also
+# upgrading the Rust toolchain, or the build will silently try to resolve
+# an incompatible version.
+[dependencies]
+oxc_allocator = "0.116.0"
+oxc_ast = "0.116.0"
+oxc_ast_visit = "0.116.0"
+oxc_parser = "0.116.0"
+oxc_semantic = "0.116.0"
+oxc_span = "0.116.0"
+oxc_syntax = "0.116.0"
