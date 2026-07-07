@@ -1,3 +1,5 @@
+pub mod semantic;
+
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Program;
 use oxc_parser::Parser;
@@ -197,5 +199,45 @@ mod structure_tests {
         assert_eq!(summary.jsx_elements[0].attribute_names, vec!["onClick".to_string()]);
         assert_eq!(summary.jsx_expression_containers, 1);
         assert_eq!(summary.signal_call_sites, 1);
+    }
+}
+
+#[cfg(test)]
+mod semantic_tests {
+    use std::collections::HashMap;
+
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser;
+    use oxc_semantic::SemanticBuilder;
+    use oxc_span::SourceType;
+
+    use crate::semantic::{find_reactive_bindings, ReactiveKind};
+
+    /// Parses `source`, builds a semantic model, and returns reactive bindings
+    /// keyed by binding NAME (not `SymbolId`, which isn't meaningful across
+    /// the allocator's lifetime once this function returns).
+    fn analyze_reactive_bindings(source: &str) -> HashMap<String, ReactiveKind> {
+        let allocator = Allocator::default();
+        let source_type = SourceType::tsx();
+        let parser_ret = Parser::new(&allocator, source, source_type).parse();
+        assert!(parser_ret.errors.is_empty(), "unexpected parse errors");
+
+        let semantic_ret = SemanticBuilder::new().build(&parser_ret.program);
+        assert!(semantic_ret.errors.is_empty(), "unexpected semantic errors");
+        let semantic = semantic_ret.semantic;
+
+        let bindings = find_reactive_bindings(&parser_ret.program, &semantic);
+
+        bindings
+            .into_iter()
+            .map(|(symbol_id, kind)| (semantic.scoping().symbol_name(symbol_id).to_string(), kind))
+            .collect()
+    }
+
+    #[test]
+    fn counter_signal_binding_is_detected() {
+        let source = include_str!("../tests/fixtures/counter.tsx");
+        let bindings = analyze_reactive_bindings(source);
+        assert_eq!(bindings.get("count"), Some(&ReactiveKind::Signal));
     }
 }
