@@ -1,6 +1,7 @@
 pub mod semantic;
 pub mod reactivity;
 pub mod diagnostics;
+pub mod tez101;
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Program;
@@ -449,5 +450,71 @@ docs: https://tez.dev/errors/TEZ999";
         // Offset 4 is "x" -- line 1, column 5 (columns are 1-based).
         let source = "let x = 1;";
         assert!(example(Span::new(4, 5)).render(source).contains("--> 1:5"));
+    }
+}
+
+#[cfg(test)]
+mod tez101_tests {
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser;
+    use oxc_semantic::SemanticBuilder;
+    use oxc_span::SourceType;
+
+    use crate::diagnostics::Diagnostic;
+    use crate::semantic::find_reactive_bindings;
+    use crate::tez101::check_body_signal_writes;
+
+    /// Parses `source`, builds the semantic model and reactive-bindings map,
+    /// and runs the TEZ101 checker. `Diagnostic` owns all its data (Span is
+    /// Copy), so returning it past the allocator's lifetime is fine.
+    fn analyze(source: &str) -> Vec<Diagnostic> {
+        let allocator = Allocator::default();
+        let source_type = SourceType::tsx();
+        let parser_ret = Parser::new(&allocator, source, source_type).parse();
+        assert!(parser_ret.errors.is_empty(), "unexpected parse errors");
+
+        let semantic_ret = SemanticBuilder::new().build(&parser_ret.program);
+        assert!(semantic_ret.errors.is_empty(), "unexpected semantic errors");
+        let semantic = semantic_ret.semantic;
+
+        let reactive_bindings = find_reactive_bindings(&parser_ret.program, &semantic);
+        check_body_signal_writes(&parser_ret.program, &semantic, &reactive_bindings)
+    }
+
+    /// The source text a diagnostic's primary span points at.
+    fn span_text<'a>(source: &'a str, diagnostic: &Diagnostic) -> &'a str {
+        &source[diagnostic.span.start as usize..diagnostic.span.end as usize]
+    }
+
+    #[test]
+    fn body_write_is_flagged() {
+        let source = include_str!("../tests/fixtures/tez101_body_write.tsx");
+        let diagnostics = analyze(source);
+        assert_eq!(diagnostics.len(), 1);
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic.code, "TEZ101");
+        assert!(diagnostic.message.contains("`count`"), "message must name the signal");
+        assert!(diagnostic.message.contains("`Counter`"), "message must name the component");
+        assert_eq!(span_text(source, diagnostic), "count.set(1)");
+        assert_eq!(diagnostic.docs_url, "https://tez.dev/errors/TEZ101");
+        assert!(!diagnostic.cause.is_empty());
+        assert!(!diagnostic.help.is_empty());
+    }
+
+    #[test]
+    fn write_inside_if_block_is_flagged() {
+        let source = include_str!("../tests/fixtures/tez101_conditional_write.tsx");
+        let diagnostics = analyze(source);
+        assert_eq!(diagnostics.len(), 1, "an if block still runs during render");
+        assert_eq!(span_text(source, &diagnostics[0]), "count.set(0)");
+    }
+
+    #[test]
+    fn two_body_writes_produce_two_diagnostics() {
+        let source = include_str!("../tests/fixtures/tez101_double_write.tsx");
+        let diagnostics = analyze(source);
+        assert_eq!(diagnostics.len(), 2, "the checker must not bail after the first violation");
+        assert!(diagnostics[0].message.contains("`a`"));
+        assert!(diagnostics[1].message.contains("`b`"));
     }
 }
