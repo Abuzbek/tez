@@ -340,4 +340,20 @@ mod reactivity_tests {
         assert_eq!(expressions[0], (JsxExpressionKind::Static, 0));
         assert_eq!(expressions[1], (JsxExpressionKind::SignalDriven, 1));
     }
+
+    #[test]
+    fn reactive_attribute_and_handler_classify_correctly() {
+        let source = include_str!("../tests/fixtures/reactive_attribute.tsx");
+        let components = analyze(source);
+        assert_eq!(components.len(), 1);
+        let (name, expressions) = &components[0];
+        assert_eq!(name, "ToggleButton");
+        assert_eq!(expressions.len(), 3);
+        // disabled={isDisabled}
+        assert_eq!(expressions[0], (JsxExpressionKind::SignalDriven, 1));
+        // onClick={() => count++}
+        assert_eq!(expressions[1], (JsxExpressionKind::Static, 0));
+        // {count}
+        assert_eq!(expressions[2], (JsxExpressionKind::SignalDriven, 1));
+    }
 }
