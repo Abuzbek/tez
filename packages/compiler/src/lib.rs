@@ -1,5 +1,7 @@
 pub mod semantic;
 pub mod reactivity;
+pub mod diagnostics;
+pub mod tez101;
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Program;
@@ -410,5 +412,221 @@ mod reactivity_tests {
         let dep_name = semantic.scoping().symbol_name(disabled_expr.dependencies[0]);
         assert_eq!(dep_name, "isDisabled");
         assert_ne!(dep_name, "count");
+    }
+}
+
+#[cfg(test)]
+mod diagnostics_tests {
+    use oxc_span::Span;
+
+    use crate::diagnostics::Diagnostic;
+
+    fn example(span: Span) -> Diagnostic {
+        Diagnostic {
+            code: "TEZ999",
+            span,
+            message: "example message".to_string(),
+            cause: "example cause".to_string(),
+            help: "example help".to_string(),
+            docs_url: "https://tez.dev/errors/TEZ999".to_string(),
+        }
+    }
+
+    #[test]
+    fn render_produces_stable_plain_text_form() {
+        // Offset 11 is the start of "x.set(2)" -- line 2, column 1.
+        let source = "let x = 1;\nx.set(2);\n";
+        let expected = "\
+error[TEZ999]: example message
+  --> 2:1
+cause: example cause
+help: example help
+docs: https://tez.dev/errors/TEZ999";
+        assert_eq!(example(Span::new(11, 19)).render(source), expected);
+    }
+
+    #[test]
+    fn render_locates_offset_on_first_line() {
+        // Offset 4 is "x" -- line 1, column 5 (columns are 1-based).
+        let source = "let x = 1;";
+        assert!(example(Span::new(4, 5)).render(source).contains("--> 1:5"));
+    }
+}
+
+#[cfg(test)]
+mod tez101_tests {
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser;
+    use oxc_semantic::SemanticBuilder;
+    use oxc_span::SourceType;
+
+    use crate::diagnostics::Diagnostic;
+    use crate::semantic::find_reactive_bindings;
+    use crate::tez101::check_body_signal_writes;
+
+    /// Parses `source`, builds the semantic model and reactive-bindings map,
+    /// and runs the TEZ101 checker. `Diagnostic` owns all its data (Span is
+    /// Copy), so returning it past the allocator's lifetime is fine.
+    fn analyze(source: &str) -> Vec<Diagnostic> {
+        let allocator = Allocator::default();
+        let source_type = SourceType::tsx();
+        let parser_ret = Parser::new(&allocator, source, source_type).parse();
+        assert!(parser_ret.errors.is_empty(), "unexpected parse errors");
+
+        let semantic_ret = SemanticBuilder::new().build(&parser_ret.program);
+        assert!(semantic_ret.errors.is_empty(), "unexpected semantic errors");
+        let semantic = semantic_ret.semantic;
+
+        let reactive_bindings = find_reactive_bindings(&parser_ret.program, &semantic);
+        check_body_signal_writes(&parser_ret.program, &semantic, &reactive_bindings)
+    }
+
+    /// The source text a diagnostic's primary span points at.
+    fn span_text<'a>(source: &'a str, diagnostic: &Diagnostic) -> &'a str {
+        &source[diagnostic.span.start as usize..diagnostic.span.end as usize]
+    }
+
+    #[test]
+    fn body_write_is_flagged() {
+        let source = include_str!("../tests/fixtures/tez101_body_write.tsx");
+        let diagnostics = analyze(source);
+        assert_eq!(diagnostics.len(), 1);
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic.code, "TEZ101");
+        assert!(diagnostic.message.contains("`count`"), "message must name the signal");
+        assert!(diagnostic.message.contains("`Counter`"), "message must name the component");
+        assert_eq!(span_text(source, diagnostic), "count.set(1)");
+        assert_eq!(diagnostic.docs_url, "https://tez.dev/errors/TEZ101");
+        assert!(!diagnostic.cause.is_empty());
+        assert!(!diagnostic.help.is_empty());
+    }
+
+    #[test]
+    fn write_inside_if_block_is_flagged() {
+        let source = include_str!("../tests/fixtures/tez101_conditional_write.tsx");
+        let diagnostics = analyze(source);
+        assert_eq!(diagnostics.len(), 1, "an if block still runs during render");
+        assert_eq!(span_text(source, &diagnostics[0]), "count.set(0)");
+    }
+
+    #[test]
+    fn two_body_writes_produce_two_diagnostics() {
+        let source = include_str!("../tests/fixtures/tez101_double_write.tsx");
+        let diagnostics = analyze(source);
+        assert_eq!(diagnostics.len(), 2, "the checker must not bail after the first violation");
+        assert!(diagnostics[0].message.contains("`a`"));
+        assert!(diagnostics[1].message.contains("`b`"));
+    }
+
+    #[test]
+    fn handler_write_is_not_flagged() {
+        let source = include_str!("../tests/fixtures/tez101_handler_write.tsx");
+        let diagnostics = analyze(source);
+        assert!(
+            diagnostics.is_empty(),
+            "a write inside an event-handler arrow runs after render, not during it: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn effect_callback_write_is_not_flagged() {
+        let source = include_str!("../tests/fixtures/tez101_effect_write.tsx");
+        let diagnostics = analyze(source);
+        assert!(
+            diagnostics.is_empty(),
+            "a write inside an effect() callback is the documented legal home for writes: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn set_call_on_non_signal_is_not_flagged() {
+        let source = include_str!("../tests/fixtures/tez101_non_signal_set.tsx");
+        let diagnostics = analyze(source);
+        assert!(
+            diagnostics.is_empty(),
+            "Map.set (any non-signal .set) must not be flagged: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn aliased_signal_import_write_is_flagged() {
+        let source = include_str!("../tests/fixtures/tez101_aliased_write.tsx");
+        let diagnostics = analyze(source);
+        assert_eq!(diagnostics.len(), 1, "aliased import must resolve via piece 1's binding map");
+        assert_eq!(span_text(source, &diagnostics[0]), "count.set(1)");
+    }
+
+    #[test]
+    fn set_call_on_computed_binding_is_not_flagged() {
+        let source = include_str!("../tests/fixtures/tez101_computed_set.tsx");
+        let diagnostics = analyze(source);
+        assert!(
+            diagnostics.is_empty(),
+            "only ReactiveKind::Signal bindings are TEZ101 write targets: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn named_helper_without_jsx_is_not_checked() {
+        let source = include_str!("../tests/fixtures/tez101_helper_write.tsx");
+        let diagnostics = analyze(source);
+        assert!(
+            diagnostics.is_empty(),
+            "a named function without JSX is a plain helper, not a component: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn factory_helper_returning_component_is_not_flagged() {
+        let source = include_str!("../tests/fixtures/tez101_factory_helper.tsx");
+        let diagnostics = analyze(source);
+        assert!(
+            diagnostics.is_empty(),
+            "a factory helper's own write must not be attributed to a nested returned component: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn fragment_component_body_write_is_flagged() {
+        let source = include_str!("../tests/fixtures/tez101_fragment_write.tsx");
+        let diagnostics = analyze(source);
+        assert_eq!(diagnostics.len(), 1, "a fragment counts as JSX for component detection");
+        assert_eq!(span_text(source, &diagnostics[0]), "count.set(1)");
+    }
+
+    #[test]
+    fn nested_component_write_is_attributed_to_inner_only() {
+        let source = include_str!("../tests/fixtures/tez101_nested_component_write.tsx");
+        let diagnostics = analyze(source);
+        assert_eq!(diagnostics.len(), 1);
+        let message = &diagnostics[0].message;
+        assert!(message.contains("`inner`"), "message must name the signal: {message}");
+        assert!(message.contains("`Inner`"), "message must attribute the write to Inner: {message}");
+        assert!(!message.contains("`Outer`"), "message must not attribute the write to Outer: {message}");
+    }
+
+    #[test]
+    fn write_inside_jsx_expression_is_flagged() {
+        let source = include_str!("../tests/fixtures/tez101_jsx_expression_write.tsx");
+        let diagnostics = analyze(source);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(span_text(source, &diagnostics[0]), "count.set(1)");
+    }
+
+    /// Error-message snapshot (spec §7 CI gate): the full rendered TEZ101
+    /// text, asserted verbatim. Changing the message wording or the render
+    /// format is allowed -- but only deliberately, by updating this string.
+    #[test]
+    fn rendered_tez101_message_snapshot() {
+        let source = include_str!("../tests/fixtures/tez101_body_write.tsx");
+        let diagnostics = analyze(source);
+        assert_eq!(diagnostics.len(), 1);
+        let expected = "\
+error[TEZ101]: signal `count` is written during `Counter`'s body execution
+  --> 5:3
+cause: a component body runs on every render; this write executes each time and can re-trigger the render that ran it
+help: move the write into an event handler or an effect() callback
+docs: https://tez.dev/errors/TEZ101";
+        assert_eq!(diagnostics[0].render(source), expected);
     }
 }
