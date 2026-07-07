@@ -258,4 +258,12 @@ mod semantic_tests {
             "a call to a locally-declared function named 'signal' (not imported from @tez/signals) must not be detected as reactive"
         );
     }
+
+    #[test]
+    fn both_signal_and_computed_bindings_are_detected() {
+        let source = include_str!("../tests/fixtures/computed_binding.tsx");
+        let bindings = analyze_reactive_bindings(source);
+        assert_eq!(bindings.get("count"), Some(&ReactiveKind::Signal));
+        assert_eq!(bindings.get("double"), Some(&ReactiveKind::Computed));
+    }
 }
