@@ -318,4 +318,14 @@ mod reactivity_tests {
         assert_eq!(expressions[0], (JsxExpressionKind::Static, 0));
         assert_eq!(expressions[1], (JsxExpressionKind::SignalDriven, 1));
     }
+
+    #[test]
+    fn static_component_has_no_expressions() {
+        let source = include_str!("../tests/fixtures/static.tsx");
+        let components = analyze(source);
+        assert_eq!(components.len(), 1);
+        let (name, expressions) = &components[0];
+        assert_eq!(name, "Static");
+        assert!(expressions.is_empty());
+    }
 }
