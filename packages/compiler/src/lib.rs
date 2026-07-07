@@ -240,4 +240,11 @@ mod semantic_tests {
         let bindings = analyze_reactive_bindings(source);
         assert_eq!(bindings.get("count"), Some(&ReactiveKind::Signal));
     }
+
+    #[test]
+    fn aliased_import_resolves_to_signal() {
+        let source = include_str!("../tests/fixtures/aliased_signal.tsx");
+        let bindings = analyze_reactive_bindings(source);
+        assert_eq!(bindings.get("count"), Some(&ReactiveKind::Signal));
+    }
 }
