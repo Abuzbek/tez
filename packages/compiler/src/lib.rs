@@ -537,4 +537,42 @@ mod tez101_tests {
             "a write inside an effect() callback is the documented legal home for writes: {diagnostics:?}"
         );
     }
+
+    #[test]
+    fn set_call_on_non_signal_is_not_flagged() {
+        let source = include_str!("../tests/fixtures/tez101_non_signal_set.tsx");
+        let diagnostics = analyze(source);
+        assert!(
+            diagnostics.is_empty(),
+            "Map.set (any non-signal .set) must not be flagged: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn aliased_signal_import_write_is_flagged() {
+        let source = include_str!("../tests/fixtures/tez101_aliased_write.tsx");
+        let diagnostics = analyze(source);
+        assert_eq!(diagnostics.len(), 1, "aliased import must resolve via piece 1's binding map");
+        assert_eq!(span_text(source, &diagnostics[0]), "count.set(1)");
+    }
+
+    #[test]
+    fn set_call_on_computed_binding_is_not_flagged() {
+        let source = include_str!("../tests/fixtures/tez101_computed_set.tsx");
+        let diagnostics = analyze(source);
+        assert!(
+            diagnostics.is_empty(),
+            "only ReactiveKind::Signal bindings are TEZ101 write targets: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn named_helper_without_jsx_is_not_checked() {
+        let source = include_str!("../tests/fixtures/tez101_helper_write.tsx");
+        let diagnostics = analyze(source);
+        assert!(
+            diagnostics.is_empty(),
+            "a named function without JSX is a plain helper, not a component: {diagnostics:?}"
+        );
+    }
 }
