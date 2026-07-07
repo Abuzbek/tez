@@ -78,6 +78,12 @@ fn classify_expression(
     ClassifiedExpression { span, kind, dependencies }
 }
 
+// "Component" here means a top-level *named function declaration* only.
+// Arrow/const-assigned components (e.g. `export const App = () => <div/>`)
+// are not detected at all and produce no entry in the result -- not even a
+// `Static` one. This is a deliberate scope boundary matching the design
+// doc's definition of "component," not a bug, but it's easy to rediscover
+// as a surprise, so it's called out here.
 struct ComponentCollector<'s, 'a> {
     semantic: &'s Semantic<'a>,
     reactive_bindings: &'s HashMap<SymbolId, ReactiveKind>,
@@ -92,7 +98,13 @@ impl<'s, 'a> Visit<'a> for ComponentCollector<'s, 'a> {
                 reactive_bindings: self.reactive_bindings,
                 expressions: Vec::new(),
             };
-            jsx_collector.visit_function(it, flags);
+            // Enter via `walk_function` rather than `jsx_collector.visit_function`:
+            // the latter would immediately hit `JsxExpressionCollector`'s own
+            // `visit_function` override (which skips *any* named function, to
+            // keep nested named functions from leaking their JSX into this
+            // component) and, since this function itself is named, return
+            // without visiting anything at all.
+            oxc_ast_visit::walk::walk_function(&mut jsx_collector, it, flags);
             self.components.push(ComponentReactivity {
                 component_name: id.name.as_str().to_string(),
                 expressions: jsx_collector.expressions,
@@ -110,6 +122,22 @@ struct JsxExpressionCollector<'s, 'a> {
 }
 
 impl<'s, 'a> Visit<'a> for JsxExpressionCollector<'s, 'a> {
+    // A nested *named* function declaration is a separate component in its
+    // own right (`ComponentCollector` registers it independently wherever
+    // it is discovered), so this sub-walk must not descend into it -- doing
+    // so would fold that other component's JSX expressions into this one's
+    // list. Anonymous functions (e.g. inline callbacks like
+    // `array.map(function (item) { return <li>{item}</li>; })`) have no
+    // independent component identity, so their JSX is still collected as
+    // part of the enclosing component, matching the existing behavior for
+    // arrow-function callbacks.
+    fn visit_function(&mut self, it: &oxc_ast::ast::Function<'a>, flags: ScopeFlags) {
+        if it.id.is_some() {
+            return;
+        }
+        oxc_ast_visit::walk::walk_function(self, it, flags);
+    }
+
     // Both JSX children expression containers (`{expr}`) and JSX attribute
     // value expression containers (`attr={expr}`) route through this same
     // method -- `walk_jsx_attribute_value`'s `ExpressionContainer` arm calls
