@@ -517,4 +517,24 @@ mod tez101_tests {
         assert!(diagnostics[0].message.contains("`a`"));
         assert!(diagnostics[1].message.contains("`b`"));
     }
+
+    #[test]
+    fn handler_write_is_not_flagged() {
+        let source = include_str!("../tests/fixtures/tez101_handler_write.tsx");
+        let diagnostics = analyze(source);
+        assert!(
+            diagnostics.is_empty(),
+            "a write inside an event-handler arrow runs after render, not during it: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn effect_callback_write_is_not_flagged() {
+        let source = include_str!("../tests/fixtures/tez101_effect_write.tsx");
+        let diagnostics = analyze(source);
+        assert!(
+            diagnostics.is_empty(),
+            "a write inside an effect() callback is the documented legal home for writes: {diagnostics:?}"
+        );
+    }
 }

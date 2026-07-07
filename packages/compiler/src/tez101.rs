@@ -90,6 +90,21 @@ struct WriteFinder<'s, 'a> {
 }
 
 impl<'s, 'a> Visit<'a> for WriteFinder<'s, 'a> {
+    // Any nested function -- named or anonymous, declaration or expression --
+    // defers execution past render, so writes inside it are legal. This skip
+    // is deliberately broader than piece 2's JSX collector (which descends
+    // into anonymous callbacks to attribute their JSX): for write-checking,
+    // only execution timing matters, so every nested function is skipped
+    // uniformly. Nested named components are still checked -- by
+    // ComponentFinder, as their own bodies.
+    fn visit_function(&mut self, _it: &Function<'a>, _flags: ScopeFlags) {}
+
+    fn visit_arrow_function_expression(
+        &mut self,
+        _it: &oxc_ast::ast::ArrowFunctionExpression<'a>,
+    ) {
+    }
+
     fn visit_call_expression(&mut self, it: &CallExpression<'a>) {
         if let Some(diagnostic) = self.check_call(it) {
             self.diagnostics.push(diagnostic);
