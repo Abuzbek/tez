@@ -1,4 +1,5 @@
 pub mod semantic;
+pub mod reactivity;
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Program;
@@ -265,5 +266,149 @@ mod semantic_tests {
         let bindings = analyze_reactive_bindings(source);
         assert_eq!(bindings.get("count"), Some(&ReactiveKind::Signal));
         assert_eq!(bindings.get("double"), Some(&ReactiveKind::Computed));
+    }
+}
+
+#[cfg(test)]
+mod reactivity_tests {
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser;
+    use oxc_semantic::SemanticBuilder;
+    use oxc_span::SourceType;
+
+    use crate::reactivity::{classify_jsx_expressions, ComponentReactivity, JsxExpressionKind};
+    use crate::semantic::find_reactive_bindings;
+
+    /// Parses and analyzes `source`, returning each component's name paired
+    /// with a summary (kind, dependency count) per classified expression, in
+    /// traversal order -- easier to assert on than raw `SymbolId`s or spans.
+    fn analyze(source: &str) -> Vec<(String, Vec<(JsxExpressionKind, usize)>)> {
+        let allocator = Allocator::default();
+        let source_type = SourceType::tsx();
+        let parser_ret = Parser::new(&allocator, source, source_type).parse();
+        assert!(parser_ret.errors.is_empty(), "unexpected parse errors");
+
+        let semantic_ret = SemanticBuilder::new().build(&parser_ret.program);
+        assert!(semantic_ret.errors.is_empty(), "unexpected semantic errors");
+        let semantic = semantic_ret.semantic;
+
+        let reactive_bindings = find_reactive_bindings(&parser_ret.program, &semantic);
+        let components = classify_jsx_expressions(&parser_ret.program, &semantic, &reactive_bindings);
+
+        components
+            .into_iter()
+            .map(|ComponentReactivity { component_name, expressions }| {
+                let summarized =
+                    expressions.into_iter().map(|e| (e.kind, e.dependencies.len())).collect();
+                (component_name, summarized)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn counter_expressions_classify_correctly() {
+        let source = include_str!("../tests/fixtures/counter.tsx");
+        let components = analyze(source);
+        assert_eq!(components.len(), 1);
+        let (name, expressions) = &components[0];
+        assert_eq!(name, "Counter");
+        // Attributes are visited before children: onClick={() => count++}
+        // (Static, a handler) comes before {count} (SignalDriven).
+        assert_eq!(expressions.len(), 2);
+        assert_eq!(expressions[0], (JsxExpressionKind::Static, 0));
+        assert_eq!(expressions[1], (JsxExpressionKind::SignalDriven, 1));
+    }
+
+    #[test]
+    fn static_component_has_no_expressions() {
+        let source = include_str!("../tests/fixtures/static.tsx");
+        let components = analyze(source);
+        assert_eq!(components.len(), 1);
+        let (name, expressions) = &components[0];
+        assert_eq!(name, "Static");
+        assert!(expressions.is_empty());
+    }
+
+    #[test]
+    fn mixed_expressions_classify_independently() {
+        let source = include_str!("../tests/fixtures/mixed_expressions.tsx");
+        let components = analyze(source);
+        assert_eq!(components.len(), 1);
+        let (name, expressions) = &components[0];
+        assert_eq!(name, "Labeled");
+        assert_eq!(expressions.len(), 2);
+        assert_eq!(expressions[0], (JsxExpressionKind::Static, 0));
+        assert_eq!(expressions[1], (JsxExpressionKind::SignalDriven, 1));
+    }
+
+    #[test]
+    fn reactive_attribute_and_handler_classify_correctly() {
+        let source = include_str!("../tests/fixtures/reactive_attribute.tsx");
+        let components = analyze(source);
+        assert_eq!(components.len(), 1);
+        let (name, expressions) = &components[0];
+        assert_eq!(name, "ToggleButton");
+        assert_eq!(expressions.len(), 3);
+        // disabled={isDisabled}
+        assert_eq!(expressions[0], (JsxExpressionKind::SignalDriven, 1));
+        // onClick={() => count++}
+        assert_eq!(expressions[1], (JsxExpressionKind::Static, 0));
+        // {count}
+        assert_eq!(expressions[2], (JsxExpressionKind::SignalDriven, 1));
+    }
+
+    /// Regression test for the JSX-expression-collector walk not stopping at
+    /// nested named function boundaries: `Outer`'s own `{count}` must not be
+    /// merged with `Inner`'s `{count}`. `ComponentCollector` never discovers
+    /// `Inner` as an independent top-level component (it stops recursing as
+    /// soon as it registers `Outer`), so `Inner` gets no entry at all here --
+    /// the fix's job is only to stop its JSX from leaking into `Outer`'s list.
+    #[test]
+    fn nested_named_function_does_not_leak_expressions_into_outer_component() {
+        let source = include_str!("../tests/fixtures/nested_component.tsx");
+        let components = analyze(source);
+        assert_eq!(components.len(), 1, "Inner must not be registered as its own component");
+        let (name, expressions) = &components[0];
+        assert_eq!(name, "Outer");
+        // Exactly one expression -- Outer's own `{count}` -- not two (which
+        // would indicate Inner's `{count}` leaked in as well).
+        assert_eq!(expressions.len(), 1);
+        assert_eq!(expressions[0], (JsxExpressionKind::SignalDriven, 1));
+    }
+
+    /// `reactive_attribute_and_handler_classify_correctly` only checks
+    /// `(kind, dependencies.len())` tuples, so it can't tell `count` and
+    /// `isDisabled` apart -- a bug that recorded the wrong signal as a
+    /// dependency would pass unnoticed. This test resolves the actual
+    /// `SymbolId` for `disabled={isDisabled}`'s dependency back to its name
+    /// and checks it is `"isDisabled"`, not `"count"`.
+    #[test]
+    fn reactive_attribute_dependency_resolves_to_correct_signal_name() {
+        let source = include_str!("../tests/fixtures/reactive_attribute.tsx");
+
+        let allocator = Allocator::default();
+        let source_type = SourceType::tsx();
+        let parser_ret = Parser::new(&allocator, source, source_type).parse();
+        assert!(parser_ret.errors.is_empty(), "unexpected parse errors");
+
+        let semantic_ret = SemanticBuilder::new().build(&parser_ret.program);
+        assert!(semantic_ret.errors.is_empty(), "unexpected semantic errors");
+        let semantic = semantic_ret.semantic;
+
+        let reactive_bindings = crate::semantic::find_reactive_bindings(&parser_ret.program, &semantic);
+        let components = classify_jsx_expressions(&parser_ret.program, &semantic, &reactive_bindings);
+
+        assert_eq!(components.len(), 1);
+        let component = &components[0];
+        assert_eq!(component.component_name, "ToggleButton");
+        assert_eq!(component.expressions.len(), 3);
+
+        // expressions[0] is `disabled={isDisabled}`.
+        let disabled_expr = &component.expressions[0];
+        assert_eq!(disabled_expr.kind, JsxExpressionKind::SignalDriven);
+        assert_eq!(disabled_expr.dependencies.len(), 1);
+        let dep_name = semantic.scoping().symbol_name(disabled_expr.dependencies[0]);
+        assert_eq!(dep_name, "isDisabled");
+        assert_ne!(dep_name, "count");
     }
 }
