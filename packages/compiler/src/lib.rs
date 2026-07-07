@@ -1,5 +1,6 @@
 pub mod semantic;
 pub mod reactivity;
+pub mod diagnostics;
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Program;
@@ -410,5 +411,43 @@ mod reactivity_tests {
         let dep_name = semantic.scoping().symbol_name(disabled_expr.dependencies[0]);
         assert_eq!(dep_name, "isDisabled");
         assert_ne!(dep_name, "count");
+    }
+}
+
+#[cfg(test)]
+mod diagnostics_tests {
+    use oxc_span::Span;
+
+    use crate::diagnostics::Diagnostic;
+
+    fn example(span: Span) -> Diagnostic {
+        Diagnostic {
+            code: "TEZ999",
+            span,
+            message: "example message".to_string(),
+            cause: "example cause".to_string(),
+            help: "example help".to_string(),
+            docs_url: "https://tez.dev/errors/TEZ999".to_string(),
+        }
+    }
+
+    #[test]
+    fn render_produces_stable_plain_text_form() {
+        // Offset 11 is the start of "x.set(2)" -- line 2, column 1.
+        let source = "let x = 1;\nx.set(2);\n";
+        let expected = "\
+error[TEZ999]: example message
+  --> 2:1
+cause: example cause
+help: example help
+docs: https://tez.dev/errors/TEZ999";
+        assert_eq!(example(Span::new(11, 19)).render(source), expected);
+    }
+
+    #[test]
+    fn render_locates_offset_on_first_line() {
+        // Offset 4 is "x" -- line 1, column 5 (columns are 1-based).
+        let source = "let x = 1;";
+        assert!(example(Span::new(4, 5)).render(source).contains("--> 1:5"));
     }
 }
