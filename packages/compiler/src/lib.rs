@@ -247,4 +247,15 @@ mod semantic_tests {
         let bindings = analyze_reactive_bindings(source);
         assert_eq!(bindings.get("count"), Some(&ReactiveKind::Signal));
     }
+
+    #[test]
+    fn locally_declared_signal_function_is_not_detected_as_reactive() {
+        let source = include_str!("../tests/fixtures/shadowed_signal.tsx");
+        let bindings = analyze_reactive_bindings(source);
+        assert_eq!(
+            bindings.get("count"),
+            None,
+            "a call to a locally-declared function named 'signal' (not imported from @tez/signals) must not be detected as reactive"
+        );
+    }
 }
