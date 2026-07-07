@@ -69,7 +69,9 @@ pub fn check_body_signal_writes(
 
 ## 2. What counts as a component
 
-Same boundary as piece 2, restated: a component is a **named function declaration whose body contains at least one JSX element**. Arrow/const-assigned components are out of scope (piece 2's documented boundary), and — new refinement for this piece — a named function *without* JSX is a plain helper, not a component, and is **not** checked: `function reset() { count.set(0) }` at module scope is legal code, not a TEZ101.
+Same boundary as piece 2, restated: a component is a **named function declaration whose body contains at least one JSX element or fragment**. Arrow/const-assigned components are out of scope (piece 2's documented boundary), and — new refinement for this piece — a named function *without* JSX is a plain helper, not a component, and is **not** checked: `function reset() { count.set(0) }` at module scope is legal code, not a TEZ101.
+
+> Amended during review (2026-07-07): the component-detection probe originally only recognized JSX *elements*, so a body returning only a fragment (`return <>{count}</>;`) was silently skipped, letting a body write past unflagged. The probe now also treats a JSX fragment as sufficient evidence of "component," closing that false negative.
 
 Nested named function declarations with JSX are independent components (piece 2's rule) and get checked as their own bodies wherever they appear.
 
@@ -93,6 +95,7 @@ Note this skip rule is deliberately broader than piece 2's JSX collector (which 
 - IIFEs: `(() => count.set(1))()` in the body does execute during render but is skipped by the nested-function rule. Accepted false negative.
 - `batch(() => …)` / `untrack(() => …)` called in the body: same shape, same accepted false negative.
 - Writes through aliases (`const c = count; c.set(1)`): the alias is not in `reactive_bindings`; same dataflow boundary piece 2 drew for reads.
+- A named helper whose only JSX sits inside an anonymous callback (e.g. `items.map(item => <li/>)`) is treated as a component and its body writes are flagged — an accepted false-positive edge, consistent with piece 2's attribution of anonymous-callback JSX to the enclosing function.
 
 TEZ101 is a **compile error** (spec §7 ranges: 1xx compile/authoring). The checker reports every violation it finds (no first-error bail); how errors halt the pipeline is the caller's concern and is outside this piece.
 

@@ -576,6 +576,43 @@ mod tez101_tests {
         );
     }
 
+    #[test]
+    fn factory_helper_returning_component_is_not_flagged() {
+        let source = include_str!("../tests/fixtures/tez101_factory_helper.tsx");
+        let diagnostics = analyze(source);
+        assert!(
+            diagnostics.is_empty(),
+            "a factory helper's own write must not be attributed to a nested returned component: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn fragment_component_body_write_is_flagged() {
+        let source = include_str!("../tests/fixtures/tez101_fragment_write.tsx");
+        let diagnostics = analyze(source);
+        assert_eq!(diagnostics.len(), 1, "a fragment counts as JSX for component detection");
+        assert_eq!(span_text(source, &diagnostics[0]), "count.set(1)");
+    }
+
+    #[test]
+    fn nested_component_write_is_attributed_to_inner_only() {
+        let source = include_str!("../tests/fixtures/tez101_nested_component_write.tsx");
+        let diagnostics = analyze(source);
+        assert_eq!(diagnostics.len(), 1);
+        let message = &diagnostics[0].message;
+        assert!(message.contains("`inner`"), "message must name the signal: {message}");
+        assert!(message.contains("`Inner`"), "message must attribute the write to Inner: {message}");
+        assert!(!message.contains("`Outer`"), "message must not attribute the write to Outer: {message}");
+    }
+
+    #[test]
+    fn write_inside_jsx_expression_is_flagged() {
+        let source = include_str!("../tests/fixtures/tez101_jsx_expression_write.tsx");
+        let diagnostics = analyze(source);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(span_text(source, &diagnostics[0]), "count.set(1)");
+    }
+
     /// Error-message snapshot (spec §7 CI gate): the full rendered TEZ101
     /// text, asserted verbatim. Changing the message wording or the render
     /// format is allowed -- but only deliberately, by updating this string.

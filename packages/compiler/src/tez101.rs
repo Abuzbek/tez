@@ -17,13 +17,16 @@ const TEZ101_HELP: &str = "move the write into an event handler or an effect() c
 
 /// TEZ101: signal write during component body execution (spec §7).
 ///
-/// A component is a named function declaration whose subtree contains at
-/// least one JSX element (piece 2's boundary; named helpers without JSX are
-/// legal write sites and are not checked). Within a component, every
-/// statement of the synchronous body is checked -- if/loops/try included --
-/// but nothing inside any nested function: a nested function defers
-/// execution past render, which is exactly what makes handler and effect()
-/// writes legal.
+/// A component is a named function (the check keys on `it.id`, so named
+/// function expressions qualify too, not just declarations) whose own body
+/// -- excluding any nested named function, which is an independent
+/// component in its own right -- contains at least one JSX element or
+/// fragment (piece 2's boundary, amended during review to also count
+/// fragments; named helpers without JSX/fragments are legal write sites and
+/// are not checked). Within a component, every statement of the synchronous
+/// body is checked -- if/loops/try included -- but nothing inside any
+/// nested function: a nested function defers execution past render, which
+/// is exactly what makes handler and effect() writes legal.
 ///
 /// Direct-only, consistent with pieces 1-2: transitive writes via helper
 /// calls, IIFEs, batch()/untrack() callbacks, and writes through aliases
@@ -38,8 +41,8 @@ pub fn check_body_signal_writes(
     finder.diagnostics
 }
 
-/// Sets `found` on the first JSX element in the walked subtree. Not walking
-/// past a found element is fine -- one is enough.
+/// Sets `found` on the first JSX element or fragment in the walked subtree.
+/// Not walking past a found element is fine -- one is enough.
 struct ContainsJsx {
     found: bool,
 }
@@ -47,6 +50,23 @@ struct ContainsJsx {
 impl<'a> Visit<'a> for ContainsJsx {
     fn visit_jsx_element(&mut self, _it: &oxc_ast::ast::JSXElement<'a>) {
         self.found = true;
+    }
+
+    fn visit_jsx_fragment(&mut self, _it: &oxc_ast::ast::JSXFragment<'a>) {
+        self.found = true;
+    }
+
+    // A nested *named* function is an independent component in its own
+    // right (mirrors `JsxExpressionCollector::visit_function` in
+    // reactivity.rs) -- its JSX must not leak into this probe and cause the
+    // enclosing function to be misidentified as a component too. Anonymous
+    // functions and arrows have no independent component identity, so this
+    // probe still descends into them.
+    fn visit_function(&mut self, it: &Function<'a>, flags: ScopeFlags) {
+        if it.id.is_some() {
+            return;
+        }
+        oxc_ast_visit::walk::walk_function(self, it, flags);
     }
 }
 
