@@ -1,4 +1,5 @@
 pub mod semantic;
+pub mod reactivity;
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Program;
@@ -265,5 +266,56 @@ mod semantic_tests {
         let bindings = analyze_reactive_bindings(source);
         assert_eq!(bindings.get("count"), Some(&ReactiveKind::Signal));
         assert_eq!(bindings.get("double"), Some(&ReactiveKind::Computed));
+    }
+}
+
+#[cfg(test)]
+mod reactivity_tests {
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser;
+    use oxc_semantic::SemanticBuilder;
+    use oxc_span::SourceType;
+
+    use crate::reactivity::{classify_jsx_expressions, ComponentReactivity, JsxExpressionKind};
+    use crate::semantic::find_reactive_bindings;
+
+    /// Parses and analyzes `source`, returning each component's name paired
+    /// with a summary (kind, dependency count) per classified expression, in
+    /// traversal order -- easier to assert on than raw `SymbolId`s or spans.
+    fn analyze(source: &str) -> Vec<(String, Vec<(JsxExpressionKind, usize)>)> {
+        let allocator = Allocator::default();
+        let source_type = SourceType::tsx();
+        let parser_ret = Parser::new(&allocator, source, source_type).parse();
+        assert!(parser_ret.errors.is_empty(), "unexpected parse errors");
+
+        let semantic_ret = SemanticBuilder::new().build(&parser_ret.program);
+        assert!(semantic_ret.errors.is_empty(), "unexpected semantic errors");
+        let semantic = semantic_ret.semantic;
+
+        let reactive_bindings = find_reactive_bindings(&parser_ret.program, &semantic);
+        let components = classify_jsx_expressions(&parser_ret.program, &semantic, &reactive_bindings);
+
+        components
+            .into_iter()
+            .map(|ComponentReactivity { component_name, expressions }| {
+                let summarized =
+                    expressions.into_iter().map(|e| (e.kind, e.dependencies.len())).collect();
+                (component_name, summarized)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn counter_expressions_classify_correctly() {
+        let source = include_str!("../tests/fixtures/counter.tsx");
+        let components = analyze(source);
+        assert_eq!(components.len(), 1);
+        let (name, expressions) = &components[0];
+        assert_eq!(name, "Counter");
+        // Attributes are visited before children: onClick={() => count++}
+        // (Static, a handler) comes before {count} (SignalDriven).
+        assert_eq!(expressions.len(), 2);
+        assert_eq!(expressions[0], (JsxExpressionKind::Static, 0));
+        assert_eq!(expressions[1], (JsxExpressionKind::SignalDriven, 1));
     }
 }
