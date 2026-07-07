@@ -575,4 +575,21 @@ mod tez101_tests {
             "a named function without JSX is a plain helper, not a component: {diagnostics:?}"
         );
     }
+
+    /// Error-message snapshot (spec §7 CI gate): the full rendered TEZ101
+    /// text, asserted verbatim. Changing the message wording or the render
+    /// format is allowed -- but only deliberately, by updating this string.
+    #[test]
+    fn rendered_tez101_message_snapshot() {
+        let source = include_str!("../tests/fixtures/tez101_body_write.tsx");
+        let diagnostics = analyze(source);
+        assert_eq!(diagnostics.len(), 1);
+        let expected = "\
+error[TEZ101]: signal `count` is written during `Counter`'s body execution
+  --> 5:3
+cause: a component body runs on every render; this write executes each time and can re-trigger the render that ran it
+help: move the write into an event handler or an effect() callback
+docs: https://tez.dev/errors/TEZ101";
+        assert_eq!(diagnostics[0].render(source), expected);
+    }
 }
