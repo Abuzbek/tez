@@ -328,4 +328,16 @@ mod reactivity_tests {
         assert_eq!(name, "Static");
         assert!(expressions.is_empty());
     }
+
+    #[test]
+    fn mixed_expressions_classify_independently() {
+        let source = include_str!("../tests/fixtures/mixed_expressions.tsx");
+        let components = analyze(source);
+        assert_eq!(components.len(), 1);
+        let (name, expressions) = &components[0];
+        assert_eq!(name, "Labeled");
+        assert_eq!(expressions.len(), 2);
+        assert_eq!(expressions[0], (JsxExpressionKind::Static, 0));
+        assert_eq!(expressions[1], (JsxExpressionKind::SignalDriven, 1));
+    }
 }
