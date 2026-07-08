@@ -43,8 +43,10 @@ pub fn check_body_signal_writes(
 
 /// Sets `found` on the first JSX element or fragment in the walked subtree.
 /// Not walking past a found element is fine -- one is enough.
-struct ContainsJsx {
-    found: bool,
+// codegen.rs reuses this probe for its component boundary, keeping "what
+// counts as a component" defined in exactly one place.
+pub(crate) struct ContainsJsx {
+    pub(crate) found: bool,
 }
 
 impl<'a> Visit<'a> for ContainsJsx {

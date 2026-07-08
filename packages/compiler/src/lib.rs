@@ -741,3 +741,84 @@ mod template_html_tests {
         assert!(what.contains("void"), "should mention void element: {what}");
     }
 }
+
+#[cfg(test)]
+mod codegen_tests {
+    use crate::codegen::{compile_dom, CompileError};
+
+    fn unsupported_what(result: Result<String, CompileError>) -> String {
+        match result {
+            Err(CompileError::Unsupported { what, .. }) => what,
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn static_component_compiles_to_template_clone() {
+        let source = include_str!("../tests/fixtures/static.tsx");
+        let out = compile_dom(source).unwrap();
+        let expected = "import { template } from \"@tez/runtime-dom\";\nconst _t1 = template(\"<div>Hello</div>\");\nexport function Static() {\n\treturn _t1();\n}\n";
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn two_components_get_sequential_templates() {
+        let source = include_str!("../tests/fixtures/codegen_two_components.tsx");
+        let out = compile_dom(source).unwrap();
+        let expected = "import { template } from \"@tez/runtime-dom\";\nconst _t1 = template(\"<p>one</p>\");\nconst _t2 = template(\"<p>two</p>\");\nexport function A() {\n\treturn _t1();\n}\nexport function B() {\n\treturn _t2();\n}\n";
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn non_component_code_passes_through() {
+        let source = include_str!("../tests/fixtures/codegen_passthrough.tsx");
+        let out = compile_dom(source).unwrap();
+        let expected = "import { template } from \"@tez/runtime-dom\";\nimport { helper } from \"./helpers\";\nconst _t1 = template(\"<section><h1>Title</h1><p>body</p></section>\");\nexport const answer = 42;\nexport function Card() {\n\treturn _t1();\n}\nexport function plain(x: number) {\n\treturn x + 1;\n}\n";
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn void_and_boolean_attributes_compile() {
+        let source = include_str!("../tests/fixtures/codegen_void_boolean.tsx");
+        let out = compile_dom(source).unwrap();
+        assert!(
+            out.contains(r#"template("<p><img src=\"x.png\"><input disabled><br></p>")"#),
+            "template HTML wrong in: {out}"
+        );
+    }
+
+    #[test]
+    fn expression_container_is_unsupported() {
+        let source = include_str!("../tests/fixtures/counter.tsx");
+        let what = unsupported_what(compile_dom(source));
+        assert!(what.contains("sub-cycle 2"), "should point at sub-cycle 2: {what}");
+    }
+
+    #[test]
+    fn fragment_root_is_unsupported() {
+        let what =
+            unsupported_what(compile_dom("export function Pair() {\n  return <>hi</>;\n}\n"));
+        assert!(what.contains("fragment root"), "fragment wording: {what}");
+    }
+
+    #[test]
+    fn jsx_outside_component_is_unsupported() {
+        let what = unsupported_what(compile_dom("const banner = <div>hi</div>;\n"));
+        assert!(what.contains("outside a component"), "wording: {what}");
+    }
+
+    #[test]
+    fn parse_errors_are_reported() {
+        let source = include_str!("../tests/fixtures/malformed.tsx");
+        match compile_dom(source) {
+            Err(CompileError::Parse(errors)) => assert!(!errors.is_empty()),
+            other => panic!("expected Parse error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn module_without_components_gets_no_injected_import() {
+        let out = compile_dom("export const n = 1;\n").unwrap();
+        assert_eq!(out, "export const n = 1;\n");
+    }
+}
