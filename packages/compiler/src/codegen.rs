@@ -99,7 +99,7 @@ impl<'a> VisitMut<'a> for ComponentTransformer<'a> {
                 if self.component_depth == 0 {
                     self.error = Some(CompileError::Unsupported {
                         span: el.span,
-                        what: "JSX outside a component function".to_string(),
+                        what: "JSX outside a component function (note: arrow/const-assigned components are not yet supported — use a named function declaration)".to_string(),
                     });
                     return;
                 }
@@ -117,7 +117,7 @@ impl<'a> VisitMut<'a> for ComponentTransformer<'a> {
             Expression::JSXFragment(f) => {
                 self.error = Some(CompileError::Unsupported {
                     span: f.span,
-                    what: "fragment root (multi-node templates arrive in sub-cycle 3)".to_string(),
+                    what: "JSX fragment (multi-node templates arrive in sub-cycle 3)".to_string(),
                 });
             }
             _ => oxc_ast_visit::walk_mut::walk_expression(self, it),

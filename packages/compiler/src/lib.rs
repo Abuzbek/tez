@@ -740,6 +740,72 @@ mod template_html_tests {
         let what = unsupported_what(serialize_first("let x = <br>oops</br>;"));
         assert!(what.contains("void"), "should mention void element: {what}");
     }
+
+    #[test]
+    fn named_character_reference_in_text_round_trips() {
+        let html = serialize_first("let x = <div>fish &amp; chips</div>;").unwrap();
+        assert_eq!(html, "<div>fish &amp; chips</div>");
+    }
+
+    #[test]
+    fn nbsp_reference_decodes_to_nbsp_char() {
+        let html = serialize_first("let x = <div>a&nbsp;b</div>;").unwrap();
+        assert_eq!(html, "<div>a\u{00A0}b</div>");
+    }
+
+    #[test]
+    fn numeric_decimal_reference_decodes() {
+        let html = serialize_first("let x = <div>&#65;</div>;").unwrap();
+        assert_eq!(html, "<div>A</div>");
+    }
+
+    #[test]
+    fn numeric_hex_reference_decodes() {
+        let html = serialize_first("let x = <div>&#x41;</div>;").unwrap();
+        assert_eq!(html, "<div>A</div>");
+    }
+
+    #[test]
+    fn character_reference_in_attribute_value_round_trips() {
+        let html = serialize_first(r#"let x = <div title="a &amp; b">ok</div>;"#).unwrap();
+        assert_eq!(html, r#"<div title="a &amp; b">ok</div>"#);
+    }
+
+    #[test]
+    fn unknown_named_reference_is_unsupported() {
+        let what = unsupported_what(serialize_first("let x = <div>&bogus;</div>;"));
+        assert!(what.contains("bogus"), "should name the entity: {what}");
+    }
+
+    #[test]
+    fn bare_ampersand_without_terminator_still_escapes() {
+        let html = serialize_first("let x = <div>fish & chips</div>;").unwrap();
+        assert_eq!(html, "<div>fish &amp; chips</div>");
+    }
+
+    #[test]
+    fn double_ampersand_without_terminator_still_escapes() {
+        let html = serialize_first("let x = <div>a && b</div>;").unwrap();
+        assert_eq!(html, "<div>a &amp;&amp; b</div>");
+    }
+
+    #[test]
+    fn empty_numeric_reference_is_left_alone() {
+        let html = serialize_first("let x = <div>&#;</div>;").unwrap();
+        assert_eq!(html, "<div>&amp;#;</div>");
+    }
+
+    #[test]
+    fn script_element_is_unsupported() {
+        let what = unsupported_what(serialize_first("let x = <script>a</script>;"));
+        assert!(what.contains("raw-text"), "should mention raw-text: {what}");
+    }
+
+    #[test]
+    fn style_element_is_unsupported() {
+        let what = unsupported_what(serialize_first("let x = <style>a</style>;"));
+        assert!(what.contains("raw-text"), "should mention raw-text: {what}");
+    }
 }
 
 #[cfg(test)]
@@ -796,7 +862,7 @@ mod codegen_tests {
     fn fragment_root_is_unsupported() {
         let what =
             unsupported_what(compile_dom("export function Pair() {\n  return <>hi</>;\n}\n"));
-        assert!(what.contains("fragment root"), "fragment wording: {what}");
+        assert!(what.contains("JSX fragment"), "fragment wording: {what}");
     }
 
     #[test]
@@ -818,5 +884,13 @@ mod codegen_tests {
     fn module_without_components_gets_no_injected_import() {
         let out = compile_dom("export const n = 1;\n").unwrap();
         assert_eq!(out, "export const n = 1;\n");
+    }
+
+    #[test]
+    fn newline_inside_template_html_is_preserved() {
+        let source = "export function Multi() {\n  return <pre>line1\nline2</pre>;\n}\n";
+        let out = compile_dom(source).unwrap();
+        let expected = "import { template } from \"@tez/runtime-dom\";\nconst _t1 = template(\"<pre>line1\\nline2</pre>\");\nexport function Multi() {\n\treturn _t1();\n}\n";
+        assert_eq!(out, expected);
     }
 }
