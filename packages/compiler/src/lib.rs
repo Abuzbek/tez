@@ -2,6 +2,8 @@ pub mod semantic;
 pub mod reactivity;
 pub mod diagnostics;
 pub mod tez101;
+pub mod codegen;
+pub mod template_html;
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Program;
@@ -628,5 +630,267 @@ cause: a component body runs on every render; this write executes each time and 
 help: move the write into an event handler or an effect() callback
 docs: https://tez.dev/errors/TEZ101";
         assert_eq!(diagnostics[0].render(source), expected);
+    }
+}
+
+#[cfg(test)]
+mod template_html_tests {
+    use oxc_allocator::Allocator;
+    use oxc_ast_visit::Visit;
+
+    use crate::codegen::CompileError;
+    use crate::template_html::serialize_static;
+
+    /// Parses `source` and serializes the first JSX element found.
+    fn serialize_first(source: &str) -> Result<String, CompileError> {
+        struct Grab {
+            out: Option<Result<String, CompileError>>,
+        }
+        impl<'a> Visit<'a> for Grab {
+            fn visit_jsx_element(&mut self, it: &oxc_ast::ast::JSXElement<'a>) {
+                if self.out.is_none() {
+                    self.out = Some(serialize_static(it));
+                }
+            }
+        }
+
+        let allocator = Allocator::default();
+        let ret = oxc_parser::Parser::new(&allocator, source, oxc_span::SourceType::tsx()).parse();
+        assert!(ret.errors.is_empty(), "unexpected parse errors");
+        let mut grab = Grab { out: None };
+        grab.visit_program(&ret.program);
+        grab.out.expect("source contains a JSX element")
+    }
+
+    fn unsupported_what(result: Result<String, CompileError>) -> String {
+        match result {
+            Err(CompileError::Unsupported { what, .. }) => what,
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn text_ampersand_and_angles_are_escaped() {
+        let html = serialize_first("let x = <div>fish & chips</div>;").unwrap();
+        assert_eq!(html, "<div>fish &amp; chips</div>");
+    }
+
+    #[test]
+    fn attribute_quotes_and_ampersands_are_escaped() {
+        let html = serialize_first(r#"let x = <div title='say "hi" & wave'>ok</div>;"#).unwrap();
+        assert_eq!(html, r#"<div title="say &quot;hi&quot; &amp; wave">ok</div>"#);
+    }
+
+    #[test]
+    fn void_element_omits_closing_tag() {
+        let html = serialize_first(r#"let x = <img src="x.png" />;"#).unwrap();
+        assert_eq!(html, r#"<img src="x.png">"#);
+    }
+
+    #[test]
+    fn boolean_attribute_emits_bare_name() {
+        let html = serialize_first("let x = <input disabled />;").unwrap();
+        assert_eq!(html, "<input disabled>");
+    }
+
+    #[test]
+    fn nested_elements_serialize_in_order() {
+        let html = serialize_first("let x = <section><h1>Title</h1><p>body</p></section>;").unwrap();
+        assert_eq!(html, "<section><h1>Title</h1><p>body</p></section>");
+    }
+
+    #[test]
+    fn expression_child_is_unsupported() {
+        let what = unsupported_what(serialize_first("let x = <div>{name}</div>;"));
+        assert!(what.contains("sub-cycle 2"), "should point at sub-cycle 2: {what}");
+    }
+
+    #[test]
+    fn dynamic_attribute_value_is_unsupported() {
+        let what = unsupported_what(serialize_first("let x = <div class={cls}>ok</div>;"));
+        assert!(what.contains("sub-cycle 2"), "should point at sub-cycle 2: {what}");
+    }
+
+    #[test]
+    fn spread_attribute_is_unsupported() {
+        let what = unsupported_what(serialize_first("let x = <div {...props}>ok</div>;"));
+        assert!(what.contains("TEZ102"), "should reference TEZ102/sub-cycle 3: {what}");
+    }
+
+    #[test]
+    fn component_tag_is_unsupported() {
+        let what = unsupported_what(serialize_first("let x = <Profile />;"));
+        assert!(what.contains("Profile"), "should name the component: {what}");
+    }
+
+    #[test]
+    fn v_directive_attribute_is_reserved() {
+        let what = unsupported_what(serialize_first("let x = <input v-model={name} />;"));
+        assert!(what.contains("reserved for the directives layer"), "reserved wording: {what}");
+    }
+
+    #[test]
+    fn use_directive_attribute_is_reserved() {
+        let what = unsupported_what(serialize_first("let x = <div use:clickOutside={close}>ok</div>;"));
+        assert!(what.contains("reserved for the directives layer"), "reserved wording: {what}");
+    }
+
+    #[test]
+    fn children_on_void_element_are_unsupported() {
+        let what = unsupported_what(serialize_first("let x = <br>oops</br>;"));
+        assert!(what.contains("void"), "should mention void element: {what}");
+    }
+
+    #[test]
+    fn named_character_reference_in_text_round_trips() {
+        let html = serialize_first("let x = <div>fish &amp; chips</div>;").unwrap();
+        assert_eq!(html, "<div>fish &amp; chips</div>");
+    }
+
+    #[test]
+    fn nbsp_reference_decodes_to_nbsp_char() {
+        let html = serialize_first("let x = <div>a&nbsp;b</div>;").unwrap();
+        assert_eq!(html, "<div>a\u{00A0}b</div>");
+    }
+
+    #[test]
+    fn numeric_decimal_reference_decodes() {
+        let html = serialize_first("let x = <div>&#65;</div>;").unwrap();
+        assert_eq!(html, "<div>A</div>");
+    }
+
+    #[test]
+    fn numeric_hex_reference_decodes() {
+        let html = serialize_first("let x = <div>&#x41;</div>;").unwrap();
+        assert_eq!(html, "<div>A</div>");
+    }
+
+    #[test]
+    fn character_reference_in_attribute_value_round_trips() {
+        let html = serialize_first(r#"let x = <div title="a &amp; b">ok</div>;"#).unwrap();
+        assert_eq!(html, r#"<div title="a &amp; b">ok</div>"#);
+    }
+
+    #[test]
+    fn unknown_named_reference_is_unsupported() {
+        let what = unsupported_what(serialize_first("let x = <div>&bogus;</div>;"));
+        assert!(what.contains("bogus"), "should name the entity: {what}");
+    }
+
+    #[test]
+    fn bare_ampersand_without_terminator_still_escapes() {
+        let html = serialize_first("let x = <div>fish & chips</div>;").unwrap();
+        assert_eq!(html, "<div>fish &amp; chips</div>");
+    }
+
+    #[test]
+    fn double_ampersand_without_terminator_still_escapes() {
+        let html = serialize_first("let x = <div>a && b</div>;").unwrap();
+        assert_eq!(html, "<div>a &amp;&amp; b</div>");
+    }
+
+    #[test]
+    fn empty_numeric_reference_is_left_alone() {
+        let html = serialize_first("let x = <div>&#;</div>;").unwrap();
+        assert_eq!(html, "<div>&amp;#;</div>");
+    }
+
+    #[test]
+    fn script_element_is_unsupported() {
+        let what = unsupported_what(serialize_first("let x = <script>a</script>;"));
+        assert!(what.contains("raw-text"), "should mention raw-text: {what}");
+    }
+
+    #[test]
+    fn style_element_is_unsupported() {
+        let what = unsupported_what(serialize_first("let x = <style>a</style>;"));
+        assert!(what.contains("raw-text"), "should mention raw-text: {what}");
+    }
+}
+
+#[cfg(test)]
+mod codegen_tests {
+    use crate::codegen::{compile_dom, CompileError};
+
+    fn unsupported_what(result: Result<String, CompileError>) -> String {
+        match result {
+            Err(CompileError::Unsupported { what, .. }) => what,
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn static_component_compiles_to_template_clone() {
+        let source = include_str!("../tests/fixtures/static.tsx");
+        let out = compile_dom(source).unwrap();
+        let expected = "import { template } from \"@tez/runtime-dom\";\nconst _t1 = template(\"<div>Hello</div>\");\nexport function Static() {\n\treturn _t1();\n}\n";
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn two_components_get_sequential_templates() {
+        let source = include_str!("../tests/fixtures/codegen_two_components.tsx");
+        let out = compile_dom(source).unwrap();
+        let expected = "import { template } from \"@tez/runtime-dom\";\nconst _t1 = template(\"<p>one</p>\");\nconst _t2 = template(\"<p>two</p>\");\nexport function A() {\n\treturn _t1();\n}\nexport function B() {\n\treturn _t2();\n}\n";
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn non_component_code_passes_through() {
+        let source = include_str!("../tests/fixtures/codegen_passthrough.tsx");
+        let out = compile_dom(source).unwrap();
+        let expected = "import { template } from \"@tez/runtime-dom\";\nimport { helper } from \"./helpers\";\nconst _t1 = template(\"<section><h1>Title</h1><p>body</p></section>\");\nexport const answer = 42;\nexport function Card() {\n\treturn _t1();\n}\nexport function plain(x: number) {\n\treturn x + 1;\n}\n";
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn void_and_boolean_attributes_compile() {
+        let source = include_str!("../tests/fixtures/codegen_void_boolean.tsx");
+        let out = compile_dom(source).unwrap();
+        let expected = "import { template } from \"@tez/runtime-dom\";\nconst _t1 = template(\"<p><img src=\\\"x.png\\\"><input disabled><br></p>\");\nexport function Fields() {\n\treturn _t1();\n}\n";
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn expression_container_is_unsupported() {
+        let source = include_str!("../tests/fixtures/counter.tsx");
+        let what = unsupported_what(compile_dom(source));
+        assert!(what.contains("sub-cycle 2"), "should point at sub-cycle 2: {what}");
+    }
+
+    #[test]
+    fn fragment_root_is_unsupported() {
+        let what =
+            unsupported_what(compile_dom("export function Pair() {\n  return <>hi</>;\n}\n"));
+        assert!(what.contains("JSX fragment"), "fragment wording: {what}");
+    }
+
+    #[test]
+    fn jsx_outside_component_is_unsupported() {
+        let what = unsupported_what(compile_dom("const banner = <div>hi</div>;\n"));
+        assert!(what.contains("outside a component"), "wording: {what}");
+    }
+
+    #[test]
+    fn parse_errors_are_reported() {
+        let source = include_str!("../tests/fixtures/malformed.tsx");
+        match compile_dom(source) {
+            Err(CompileError::Parse(errors)) => assert!(!errors.is_empty()),
+            other => panic!("expected Parse error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn module_without_components_gets_no_injected_import() {
+        let out = compile_dom("export const n = 1;\n").unwrap();
+        assert_eq!(out, "export const n = 1;\n");
+    }
+
+    #[test]
+    fn newline_inside_template_html_is_preserved() {
+        let source = "export function Multi() {\n  return <pre>line1\nline2</pre>;\n}\n";
+        let out = compile_dom(source).unwrap();
+        let expected = "import { template } from \"@tez/runtime-dom\";\nconst _t1 = template(\"<pre>line1\\nline2</pre>\");\nexport function Multi() {\n\treturn _t1();\n}\n";
+        assert_eq!(out, expected);
     }
 }
