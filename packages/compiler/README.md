@@ -16,6 +16,14 @@ Implemented so far (no pipeline/driver yet — each is a public library function
   execution (`src/tez101.rs`), producing `Diagnostic` values (`src/diagnostics.rs`)
   that carry code + span + cause + fix + docs URL and render to a snapshot-tested
   plain-text form. Docs URL convention: `https://tez.dev/errors/<CODE>`.
+- `serialize_static()` — static JSX element tree → escaped HTML template
+  string; owns void elements, boolean attributes, and the reserved `v-*` /
+  `use:` directive namespaces (`src/template_html.rs`).
+- `compile_dom()` — DOM codegen entry point (sub-cycle 1: static components
+  only): hoists `const _tN = template("…")`, replaces JSX with `_tN()` clone
+  calls, injects the `@tez/runtime-dom` import, prints via `oxc_codegen`.
+  Everything dynamic is an explicit `Unsupported` error until its sub-cycle
+  lands (`src/codegen.rs`).
 
-All oxc crates are pinned to 0.116.0 (rustc 1.91.1 compatibility) — see
-`Cargo.toml` before touching dependencies.
+All oxc crates (including `oxc_codegen`) are pinned to 0.116.0 (rustc 1.91.1
+compatibility) — see `Cargo.toml` before touching dependencies.
