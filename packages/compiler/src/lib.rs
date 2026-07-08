@@ -781,10 +781,8 @@ mod codegen_tests {
     fn void_and_boolean_attributes_compile() {
         let source = include_str!("../tests/fixtures/codegen_void_boolean.tsx");
         let out = compile_dom(source).unwrap();
-        assert!(
-            out.contains(r#"template("<p><img src=\"x.png\"><input disabled><br></p>")"#),
-            "template HTML wrong in: {out}"
-        );
+        let expected = "import { template } from \"@tez/runtime-dom\";\nconst _t1 = template(\"<p><img src=\\\"x.png\\\"><input disabled><br></p>\");\nexport function Fields() {\n\treturn _t1();\n}\n";
+        assert_eq!(out, expected);
     }
 
     #[test]
