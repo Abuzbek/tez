@@ -2,6 +2,8 @@ pub mod semantic;
 pub mod reactivity;
 pub mod diagnostics;
 pub mod tez101;
+pub mod codegen;
+pub mod template_html;
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Program;
@@ -628,5 +630,114 @@ cause: a component body runs on every render; this write executes each time and 
 help: move the write into an event handler or an effect() callback
 docs: https://tez.dev/errors/TEZ101";
         assert_eq!(diagnostics[0].render(source), expected);
+    }
+}
+
+#[cfg(test)]
+mod template_html_tests {
+    use oxc_allocator::Allocator;
+    use oxc_ast_visit::Visit;
+
+    use crate::codegen::CompileError;
+    use crate::template_html::serialize_static;
+
+    /// Parses `source` and serializes the first JSX element found.
+    fn serialize_first(source: &str) -> Result<String, CompileError> {
+        struct Grab {
+            out: Option<Result<String, CompileError>>,
+        }
+        impl<'a> Visit<'a> for Grab {
+            fn visit_jsx_element(&mut self, it: &oxc_ast::ast::JSXElement<'a>) {
+                if self.out.is_none() {
+                    self.out = Some(serialize_static(it));
+                }
+            }
+        }
+
+        let allocator = Allocator::default();
+        let ret = oxc_parser::Parser::new(&allocator, source, oxc_span::SourceType::tsx()).parse();
+        assert!(ret.errors.is_empty(), "unexpected parse errors");
+        let mut grab = Grab { out: None };
+        grab.visit_program(&ret.program);
+        grab.out.expect("source contains a JSX element")
+    }
+
+    fn unsupported_what(result: Result<String, CompileError>) -> String {
+        match result {
+            Err(CompileError::Unsupported { what, .. }) => what,
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn text_ampersand_and_angles_are_escaped() {
+        let html = serialize_first("let x = <div>fish & chips</div>;").unwrap();
+        assert_eq!(html, "<div>fish &amp; chips</div>");
+    }
+
+    #[test]
+    fn attribute_quotes_and_ampersands_are_escaped() {
+        let html = serialize_first(r#"let x = <div title='say "hi" & wave'>ok</div>;"#).unwrap();
+        assert_eq!(html, r#"<div title="say &quot;hi&quot; &amp; wave">ok</div>"#);
+    }
+
+    #[test]
+    fn void_element_omits_closing_tag() {
+        let html = serialize_first(r#"let x = <img src="x.png" />;"#).unwrap();
+        assert_eq!(html, r#"<img src="x.png">"#);
+    }
+
+    #[test]
+    fn boolean_attribute_emits_bare_name() {
+        let html = serialize_first("let x = <input disabled />;").unwrap();
+        assert_eq!(html, "<input disabled>");
+    }
+
+    #[test]
+    fn nested_elements_serialize_in_order() {
+        let html = serialize_first("let x = <section><h1>Title</h1><p>body</p></section>;").unwrap();
+        assert_eq!(html, "<section><h1>Title</h1><p>body</p></section>");
+    }
+
+    #[test]
+    fn expression_child_is_unsupported() {
+        let what = unsupported_what(serialize_first("let x = <div>{name}</div>;"));
+        assert!(what.contains("sub-cycle 2"), "should point at sub-cycle 2: {what}");
+    }
+
+    #[test]
+    fn dynamic_attribute_value_is_unsupported() {
+        let what = unsupported_what(serialize_first("let x = <div class={cls}>ok</div>;"));
+        assert!(what.contains("sub-cycle 2"), "should point at sub-cycle 2: {what}");
+    }
+
+    #[test]
+    fn spread_attribute_is_unsupported() {
+        let what = unsupported_what(serialize_first("let x = <div {...props}>ok</div>;"));
+        assert!(what.contains("TEZ102"), "should reference TEZ102/sub-cycle 3: {what}");
+    }
+
+    #[test]
+    fn component_tag_is_unsupported() {
+        let what = unsupported_what(serialize_first("let x = <Profile />;"));
+        assert!(what.contains("Profile"), "should name the component: {what}");
+    }
+
+    #[test]
+    fn v_directive_attribute_is_reserved() {
+        let what = unsupported_what(serialize_first("let x = <input v-model={name} />;"));
+        assert!(what.contains("reserved for the directives layer"), "reserved wording: {what}");
+    }
+
+    #[test]
+    fn use_directive_attribute_is_reserved() {
+        let what = unsupported_what(serialize_first("let x = <div use:clickOutside={close}>ok</div>;"));
+        assert!(what.contains("reserved for the directives layer"), "reserved wording: {what}");
+    }
+
+    #[test]
+    fn children_on_void_element_are_unsupported() {
+        let what = unsupported_what(serialize_first("let x = <br>oops</br>;"));
+        assert!(what.contains("void"), "should mention void element: {what}");
     }
 }
