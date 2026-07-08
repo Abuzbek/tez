@@ -78,7 +78,7 @@ export function Static() {
 
 The HTML argument is a plain **string literal AST node** (not a template literal): `oxc_codegen` then owns JS-level escaping, so backticks or `${` inside static text can never corrupt the output. (The architecture spec's §3.2 backtick example is illustrative, not contractual; snapshots lock whatever quote style `oxc_codegen` actually prints.)
 
-- One `_tN` const per component in source order, hoisted to module top after imports.
+- One `_tN` const per JSX root in source order (a component with multiple JSX-returning branches hoists one template per branch), hoisted to module top after imports.
 - Exactly one `import { template } from "@tez/runtime-dom"` injected (first statement).
 - All non-component code passes through byte-faithful modulo `oxc_codegen` printing.
 - Component boundary: identical to pieces 2–3 (named function whose own body — excluding nested named functions — contains a JSX element or fragment).
@@ -86,7 +86,7 @@ The HTML argument is a plain **string literal AST node** (not a template literal
 ### 2.3 Module structure
 
 - **`packages/compiler/src/template_html.rs`** — pure function: JSX element → static HTML string. Owns:
-  - *Escaping:* text children escape `&` `<` `>`; attribute values escape `&` `"`. Emitted attributes always double-quoted.
+  - *Escaping:* text children escape `&` `<` `>`; attribute values escape `&` `"`. Emitted attributes always double-quoted. HTML character references in JSX text/attribute values (a curated named-entity set plus decimal/hex numeric references) are decoded before this re-escaping so they round-trip correctly instead of double-encoding; an unknown named reference is an explicit `Unsupported` error, and raw-text elements (`script`/`style`) are rejected outright since their content can't be safely entity-escaped — amended during review 2026-07-08.
   - *Void elements* (`area base br col embed hr img input link meta source track wbr`): no closing tag, children on them are an `Unsupported` error.
   - *Boolean attributes:* a bare JSX attribute (`<input disabled />`) emits the bare HTML attribute.
   - Returns `Result<String, CompileError>` so unsupported shapes surface with spans.
